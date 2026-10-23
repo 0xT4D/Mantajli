@@ -467,9 +467,25 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
 
     // --- effects (alpha-preserving wrapper for layers with transparency)
     // Motion effects are curves (applied below), not filters.
-    const active = clip.effects.filter((e) => e.enabled && !MOTION_EFFECTS.has(e.type) && !FRAME_EFFECTS.has(e.type));
+    const keyFx = clip.effects.find((e) => e.enabled && e.type === "chromaKey");
+    const active = clip.effects.filter((e) => e.enabled && !MOTION_EFFECTS.has(e.type) && !FRAME_EFFECTS.has(e.type) && e.type !== "chromaKey");
     const timing: LayerTiming = { clipOffset: layer.clipOffset, frames: layer.frames, fps, width: W };
-    if (active.length) {
+    if (keyFx) {
+      // Chroma key: the matte comes from the ungraded pixels (combined with any
+      // existing alpha); colour effects run on a separate branch and the two
+      // are merged, so grading never changes what is keyed.
+      const kp = keyFx.params as Record<string, number | string | boolean>;
+      stmts.push(`[${cur}]format=rgba,split=3[${id}kc][${id}kk][${id}ka]`);
+      stmts.push(`[${id}kk]format=yuva444p,chromakey=color=${hex(String(kp.color))}:similarity=${n6(Number(kp.similarity))}:blend=${n6(Number(kp.blend))},alphaextract[${id}km]`);
+      stmts.push(`[${id}ka]alphaextract[${id}oa]`, `[${id}oa][${id}km]blend=all_mode=multiply[${id}am]`);
+      const key = String(kp.color).toLowerCase();
+      const spill = kp.despill ? `,despill=type=${parseInt(key.slice(5, 7), 16) > parseInt(key.slice(3, 5), 16) ? "blue" : "green"}` : "";
+      stmts.push(`[${id}kc]format=gbrp${spill}[${id}kd]`);
+      const fx = active.length ? effectStatements(active, `${id}kd`, id, px, ctx, timing) : { stmts: [], out: `${id}kd` };
+      stmts.push(...fx.stmts);
+      stmts.push(`[${fx.out}]format=gbrp[${id}kf]`, `[${id}kf][${id}am]alphamerge[${id}fx]`);
+      cur = `${id}fx`;
+    } else if (active.length) {
       if (hasAlpha) {
         stmts.push(`[${cur}]format=rgba,split=2[${id}c][${id}a]`);
         stmts.push(`[${id}a]alphaextract[${id}am]`);

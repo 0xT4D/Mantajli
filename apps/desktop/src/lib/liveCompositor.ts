@@ -1,5 +1,6 @@
 import {
   buildCompositionPlan,
+  chromaKeyAlpha,
   evalCurve,
   evalLayer,
   findAsset,
@@ -183,7 +184,15 @@ export class LiveCompositor {
         if (mask) clipMask(ctx, mask, dw, dh);
         if (hasFlip(clip, "horizontal")) ctx.scale(-1, 1);
         if (hasFlip(clip, "vertical")) ctx.scale(1, -1);
-        ctx.drawImage(src, cx0, cy0, cw, ch, -dw / 2, -dh / 2, dw, dh);
+        const key = clip.effects.find((e) => e.enabled && e.type === "chromaKey");
+        let keyedSrc: HTMLCanvasElement | undefined;
+        try {
+          if (key) keyedSrc = this.keyed(src, cx0, cy0, cw, ch, Math.min(dw, W * 2), Math.min(dh, H * 2), key.params);
+        } catch {
+          keyedSrc = undefined; // tainted source: show it unkeyed rather than nothing
+        }
+        if (keyedSrc) ctx.drawImage(keyedSrc, -dw / 2, -dh / 2, dw, dh);
+        else ctx.drawImage(src, cx0, cy0, cw, ch, -dw / 2, -dh / 2, dw, dh);
       }
       ctx.restore();
       if (split) {
@@ -212,7 +221,7 @@ export class LiveCompositor {
     let c = this.scratchCanvases[i];
     if (!c) this.scratchCanvases[i] = c = document.createElement("canvas");
     if (c.width !== W || c.height !== H) [c.width, c.height] = [W, H];
-    const g = c.getContext("2d")!;
+    const g = c.getContext("2d", { willReadFrequently: i === 3 })!; // #3 is read back for keying
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
     g.globalCompositeOperation = "source-over";
@@ -242,6 +251,32 @@ export class LiveCompositor {
       merged.drawImage(this.scratchCanvases[2]!, dx, 0);
     }
     return this.scratchCanvases[1]!;
+  }
+
+  /** Source region drawn at w×h with the chroma key applied per pixel (same formula as the export). */
+  private keyed(src: CanvasImageSource, sx: number, sy: number, sw: number, sh: number, w: number, h: number, params: Record<string, unknown>): HTMLCanvasElement {
+    const W = Math.max(1, Math.round(w));
+    const H = Math.max(1, Math.round(h));
+    const g = this.scratch(3, W, H);
+    g.drawImage(src, sx, sy, sw, sh, 0, 0, W, H);
+    const img = g.getImageData(0, 0, W, H);
+    const d = img.data;
+    const hexc = String(params.color);
+    const key: [number, number, number] = [parseInt(hexc.slice(1, 3), 16), parseInt(hexc.slice(3, 5), 16), parseInt(hexc.slice(5, 7), 16)];
+    const sim = Number(params.similarity);
+    const blend = Number(params.blend);
+    const greenKey = key[1] >= key[2];
+    for (let i = 0; i < d.length; i += 4) {
+      const a = chromaKeyAlpha(d[i]!, d[i + 1]!, d[i + 2]!, key, sim, blend);
+      d[i + 3] = Math.round(d[i + 3]! * a);
+      if (params.despill) {
+        // Clamp the key channel to the other two (FFmpeg despill, approximately).
+        if (greenKey) d[i + 1] = Math.min(d[i + 1]!, Math.max(d[i]!, d[i + 2]!));
+        else d[i + 2] = Math.min(d[i + 2]!, Math.max(d[i]!, d[i + 1]!));
+      }
+    }
+    g.putImageData(img, 0, 0);
+    return this.scratchCanvases[3]!;
   }
 
   private syncMedia(el: MediaEl, layer: { sourceStart: number; speed: number }, playing: boolean) {

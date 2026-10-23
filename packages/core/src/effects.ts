@@ -163,6 +163,18 @@ export const EFFECTS: EffectSpec[] = [
     ],
   },
   {
+    type: "chromaKey",
+    label: "Chroma Key (Green Screen)",
+    category: "stylize",
+    description: "Make a backdrop colour transparent (green/blue screen). Similarity widens the keyed range, blend softens the edge, despill removes colour fringes. Keyed first, before other effects.",
+    params: [
+      { key: "color", label: "Key colour", kind: "color", default: "#00ff00" },
+      { key: "similarity", label: "Similarity", kind: "number", min: 0.01, max: 0.6, step: 0.01, default: 0.15 },
+      { key: "blend", label: "Edge blend", kind: "number", min: 0, max: 0.5, step: 0.01, default: 0.08 },
+      { key: "despill", label: "Despill", kind: "bool", default: true },
+    ],
+  },
+  {
     type: "letterbox",
     label: "Letterbox (Cinematic Bars)",
     category: "stylize",
@@ -372,3 +384,16 @@ export function lookSpec(id: string): LookSpec | undefined {
 
 /** Line height (× font size) for 2D text, shared by export and live preview. */
 export const TEXT_LINE_HEIGHT = 1.2;
+
+/**
+ * Chroma-key alpha (0–1) for an RGB pixel, mirroring FFmpeg's chromakey:
+ * distance of the pixel's chroma (U, V; BT.601) from the key colour's.
+ */
+export function chromaKeyAlpha(r: number, g: number, b: number, key: [number, number, number], similarity: number, blend: number): number {
+  const uv = (R: number, G: number, B: number): [number, number] => [-0.168736 * R - 0.331264 * G + 0.5 * B + 128, 0.5 * R - 0.418688 * G - 0.081312 * B + 128];
+  const [u, v] = uv(r, g, b);
+  const [ku, kv] = uv(...key);
+  const diff = Math.sqrt(((u - ku) ** 2 + (v - kv) ** 2) / (255 * 255 * 2));
+  if (diff <= similarity) return 0;
+  return blend > 0.0001 ? Math.min(1, (diff - similarity) / blend) : 1;
+}

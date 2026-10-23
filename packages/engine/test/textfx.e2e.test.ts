@@ -168,6 +168,34 @@ describe("wipe/iris transitions and typewriter text", () => {
     near((await sample()).centre, base.map((b) => (b + b * g) / 2));
   });
 
+  it("keys out a green screen so the layer below shows through", async () => {
+    const { run } = await import("../src/util/proc.js");
+    if (!engine.deps.ffmpeg) await engine.init();
+    const dir = path.join(TMP, "keyfx");
+    await engine.closeProject();
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    const gs = path.join(dir, "greenscreen.png");
+    await run("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "color=c=0x10d040:s=640x360", "-vf", "drawbox=x=220:y=100:w=200:h=160:color=0xd02020:t=fill", "-frames:v", "1", gs], { timeoutMs: 30000 });
+    await engine.createProject({ name: "KeyFX", format: "landscape", parentDir: dir });
+    const s = engine.requireSession();
+    const track = (n: string) => s.project.tracks.find((t) => t.name === n)!.id;
+    s.dispatch("clip.add", { trackId: track("V1"), clip: { type: "color", fill: "#2040ff", start: 0, duration: 10 } });
+    const img = (await engine.importMedia([gs])).imported[0]!;
+    const fg = s.dispatch("clip.add", { trackId: track("V2"), clip: { type: "media", assetId: img.id, start: 0, duration: 10 } });
+    s.dispatch("clip.update", { clipId: fg.clipId, props: { transform: { fit: "stretch" } } });
+    s.dispatch("effect.add", { clipId: fg.clipId, type: "chromaKey", params: { color: "#10d040" } });
+    // A grade after the key must not change what is keyed.
+    s.dispatch("effect.add", { clipId: fg.clipId, type: "basicColor", params: { saturation: 0.5 } });
+    const px = await pixels((await engine.renderStill(2, { scale: 0.25 })).path);
+    const corner = px.at(5, 5);
+    const centre = px.at(px.w / 2, px.h / 2);
+    expect(corner[2]).toBeGreaterThan(200); // blue background shows through
+    expect(corner[1]).toBeLessThan(110);
+    expect(centre[0]).toBeGreaterThan(120); // the red subject stays (desaturated)
+    expect(centre[0]).toBeGreaterThan(centre[2] + 30);
+  });
+
   it("draws letterbox bars and glitch bursts", async () => {
     const { evalLayer, glitchAt, layerCurves, letterboxBar } = await import("@mantagli/core");
     const dir = path.join(TMP, "stylefx");

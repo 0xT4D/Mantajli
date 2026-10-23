@@ -46,7 +46,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 
 ## M6 Cinematic workflows
 - [x] Beat/downbeat/onset detection → markers, snapping to markers
-- [x] Looks (6), 17 effects, 13 transitions, text animations (fade/slide/pop/typewriter)
+- [x] Looks (6), 18 effects, 13 transitions, text animations (fade/slide/pop/typewriter)
 - [x] Typewriter text (in/out), wipe left/right/up/down + iris transitions (textfx.e2e, pixel checks)
 - [x] Motion effects as curves: camera shake (seeded), beat pulse on beat/downbeat markers (animation.test + textfx.e2e)
 
@@ -63,7 +63,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Captions: SRT/WebVTT import as styled caption clips (bold/boxed/clean/karaoke, safe-zone aware), SRT export (captions.test, ai.test)
 - [x] One-click auto-edit to beats: core command timeline.autoEdit, Auto edit dialog (bin wand button), AI tool timeline_auto_edit (speedramp.test; run in UI)
 - [x] Freeze frame (clip.freezeFrame, ripple) and reverse clips incl. reversed audio (speedramp.test + speedramp.e2e)
-- [ ] Chroma key (green screen)
+- [x] Chroma key: matte from ungraded pixels (separate branch), despill, live per-pixel key with the same formula (textfx.e2e + screenshots)
 
 ## M7 AI Director
 - [x] Shared tool layer (52 tools), MCP server (standalone + bridge to app)
