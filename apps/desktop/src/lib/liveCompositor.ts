@@ -1,4 +1,19 @@
-import { buildCompositionPlan, evalLayer, findAsset, fpsValue, layerCurves, TEXT_LINE_HEIGHT, type Asset, type Clip, type Project, type VisualLayer } from "@mantagli/core";
+import {
+  buildCompositionPlan,
+  evalLayer,
+  findAsset,
+  fpsValue,
+  layerCurves,
+  MASK_FEATHER,
+  revealLines,
+  TEXT_LINE_HEIGHT,
+  textReveal,
+  transitionMask,
+  type Asset,
+  type Clip,
+  type Project,
+  type VisualLayer,
+} from "@mantagli/core";
 import { engine } from "../engine/client";
 
 /**
@@ -126,13 +141,16 @@ export class LiveCompositor {
       ctx.filter = cssFilter(clip, k);
       ctx.translate(W / 2 + x, H / 2 + y);
       if (st.rotation) ctx.rotate((st.rotation * Math.PI) / 180);
+      const mask = transitionMask(clip, clipFrame);
       if (clip.type === "color") {
         ctx.scale(st.scale, st.scale);
+        if (mask) clipMask(ctx, mask, W, H);
         ctx.fillStyle = clip.fill;
         ctx.fillRect(-W / 2, -H / 2, W, H);
       } else if (clip.type === "text") {
         ctx.scale(st.scale, st.scale);
-        drawText(ctx, clip, W, H, k);
+        if (mask) clipMask(ctx, mask, W, H);
+        drawText(ctx, clip, W, H, k, textReveal(clip, clipFrame));
       } else if (src && sw && sh) {
         const cr = clip.transform.crop;
         const cx0 = sw * cr.left;
@@ -148,6 +166,7 @@ export class LiveCompositor {
         }
         dw *= st.scale;
         dh *= st.scale;
+        if (mask) clipMask(ctx, mask, dw, dh);
         if (hasFlip(clip, "horizontal")) ctx.scale(-1, 1);
         if (hasFlip(clip, "vertical")) ctx.scale(1, -1);
         ctx.drawImage(src, cx0, cy0, cw, ch, -dw / 2, -dh / 2, dw, dh);
@@ -253,18 +272,41 @@ function cssFilter(clip: Clip, k: number): string {
   return parts.length ? parts.join(" ") : "none";
 }
 
-function drawText(ctx: CanvasRenderingContext2D, clip: Clip & { type: "text" }, W: number, H: number, k: number) {
+/**
+ * Clip to the visible part of a wipe/iris mask on a w×h layer centred at the
+ * origin. The export feathers the edge; here the edge sits mid-feather.
+ */
+function clipMask(ctx: CanvasRenderingContext2D, m: NonNullable<ReturnType<typeof transitionMask>>, w: number, h: number) {
+  const f = w * MASK_FEATHER;
+  const p = m.progress;
+  ctx.beginPath();
+  if (m.shape === "right") ctx.rect(-w / 2, -h / 2, (w + f) * p - f / 2, h);
+  else if (m.shape === "left") {
+    const e = w - (w + f) * p + f / 2;
+    ctx.rect(-w / 2 + e, -h / 2, w - e, h);
+  } else if (m.shape === "down") ctx.rect(-w / 2, -h / 2, w, (h + f) * p - f / 2);
+  else if (m.shape === "up") {
+    const e = h - (h + f) * p + f / 2;
+    ctx.rect(-w / 2, -h / 2 + e, w, h - e);
+  } else ctx.arc(0, 0, Math.max(0, (Math.hypot(w, h) / 2 + f) * p - f / 2), 0, Math.PI * 2);
+  ctx.clip();
+}
+
+function drawText(ctx: CanvasRenderingContext2D, clip: Clip & { type: "text" }, W: number, H: number, k: number, visible: number) {
   const s = clip.style;
   const size = s.fontSize * k;
   ctx.font = `${s.bold ? "700" : "400"} ${size}px "${s.fontFamily}", sans-serif`;
   ctx.textBaseline = "middle";
-  const lines = clip.text.split("\n");
+  // Layout uses every line (fixed grid); typewriter only truncates what is drawn.
+  const lines = revealLines(clip.text, visible);
   const lh = size * TEXT_LINE_HEIGHT;
   const margin = W * 0.08;
   const total = lh * lines.length;
   ctx.textAlign = s.align;
   const x = s.align === "left" ? -W / 2 + margin : s.align === "right" ? W / 2 - margin : 0;
+  const typing = visible < Array.from(clip.text.replace(/\r?\n/g, "")).length;
   lines.forEach((line, i) => {
+    if (typing && !line) return; // not typed yet (the export skips these lines too)
     const y = -total / 2 + lh * (i + 0.5);
     if (s.box) {
       const m = ctx.measureText(line);

@@ -5,6 +5,10 @@ import {
   findAsset,
   isConstant,
   layerCurves,
+  MASK_FEATHER,
+  revealLines,
+  textReveal,
+  transitionMask,
   type Asset,
   type CompositionPlan,
   type Curve,
@@ -292,9 +296,8 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
         const size = s.fontSize * px;
         const lh = size * TEXT_LINE_HEIGHT;
         const top = (H - lh * lines.length) / 2;
-        const draws = lines.map((line, i) => {
-          const name = `${id}_${i}.txt`;
-          ctx.writeFile(name, line.length ? line : " ");
+        const drawLine = (content: string, i: number, name: string, enable?: string) => {
+          ctx.writeFile(name, content.length ? content : " ");
           const opts = [
             fontOpt,
             `textfile=${name}`,
@@ -307,8 +310,27 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
           if (s.strokeWidth > 0) opts.push(`borderw=${n6(s.strokeWidth * px)}`, `bordercolor=${hex(s.strokeColor)}`);
           if (s.shadow) opts.push(`shadowx=${Math.max(1, Math.round(4 * px))}`, `shadowy=${Math.max(1, Math.round(4 * px))}`, `shadowcolor=${hex(s.shadowColor)}@0.6`);
           if (s.box) opts.push("box=1", `boxcolor=${hex(s.boxColor)}@${n6(s.boxOpacity)}`, `boxborderw=${Math.round(size * 0.35)}`);
+          if (enable) opts.push(`enable='${enable}'`);
           return `drawtext=${opts.join(":")}`;
-        });
+        };
+        let draws: string[];
+        if (clip.animation.in === "typewriter" || clip.animation.out === "typewriter") {
+          // Typewriter: one drawtext per (line, visible prefix), enabled for the
+          // frames where that prefix shows (layer-local t, half-frame margins).
+          draws = [];
+          lines.forEach((_, i) => {
+            let runStart = 0;
+            let cur: string | null = null;
+            for (let j = 0; j <= layer.frames; j++) {
+              const v = j < layer.frames ? revealLines(clip.text, textReveal(clip, layer.clipOffset + j))[i]! : null;
+              if (v === cur) continue;
+              if (cur) draws.push(drawLine(cur, i, `${id}_${i}_${draws.length}.txt`, `between(t,${n6((runStart - 0.5) / fps)},${n6((j - 0.5) / fps)})`));
+              cur = v;
+              runStart = j;
+            }
+          });
+          if (!draws.length) draws = ["null"];
+        } else draws = lines.map((line, i) => drawLine(line, i, `${id}_${i}.txt`));
         stmts.push(`color=c=black@0:s=${W}x${H}:r=${fpsR}:d=${n6(layerSec + 1)},format=rgba,${draws.join(",")}[${src}]`);
         hasAlpha = true;
         fullFrame = true;
@@ -382,6 +404,21 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
       post.push(`sendcmd=f=${id}op.cmd`, `colorchannelmixer@${id}op=aa=${n6(op[0]!)}`);
     } else if (op[0]! < 0.999) {
       post.push(`colorchannelmixer=aa=${n6(op[0]!)}`);
+    }
+    // Wipe/iris transitions: soft-edged alpha mask in layer coordinates, only during the transition.
+    const wipe = transitionMask(clip, 0);
+    if (wipe && layer.clipOffset < clip.transitionIn!.duration) {
+      const d = clip.transitionIn!.duration;
+      const u = `clip(${plus("T", layer.clipOffset / fps)}*${n6(fps / d)},0,1)`;
+      const p = `(${u}*${u}*(3-2*${u}))`;
+      const f = `(W*${n6(MASK_FEATHER)})`;
+      const m =
+        wipe.shape === "right" ? `((W+${f})*${p}-X)/${f}`
+        : wipe.shape === "left" ? `(X-W+(W+${f})*${p})/${f}`
+        : wipe.shape === "down" ? `((H+${f})*${p}-Y)/${f}`
+        : wipe.shape === "up" ? `(Y-H+(H+${f})*${p})/${f}`
+        : `((hypot(W,H)/2+${f})*${p}-hypot(X-W/2,Y-H/2))/${f}`;
+      post.push(`geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*clip(${m},0,1)':enable='lt(${plus("t", layer.clipOffset / fps)},${n6(d / fps)})'`);
     }
     const rotAnimated = animated(curves.rotation);
     const rot0 = evalLayer(curves, layer.clipOffset).rotation;

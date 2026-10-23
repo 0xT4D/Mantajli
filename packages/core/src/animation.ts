@@ -1,4 +1,4 @@
-import type { Clip, Easing, KeyframeProperty } from "./schema.js";
+import type { Clip, Easing, KeyframeProperty, TextClip } from "./schema.js";
 import { ease } from "./timeline.js";
 
 /**
@@ -89,7 +89,7 @@ export function layerCurves(clip: Clip, opts: { width: number; height: number; h
   if (clip.type === "text") {
     const ad = Math.min(clip.animation.duration, Math.floor(dur / 2));
     const a = clip.animation;
-    if (ad > 0 && a.in !== "none") {
+    if (ad > 0 && a.in !== "none" && a.in !== "typewriter") {
       c.opacity.push([K(0, 0, "easeOut"), K(ad, 1)]);
       if (a.in === "slideUp") c.y.push([K(0, H * 0.06, "easeOut"), K(ad, 0)]);
       if (a.in === "slideDown") c.y.push([K(0, -H * 0.06, "easeOut"), K(ad, 0)]);
@@ -97,7 +97,7 @@ export function layerCurves(clip: Clip, opts: { width: number; height: number; h
       if (a.in === "slideRight") c.x.push([K(0, -W * 0.08, "easeOut"), K(ad, 0)]);
       if (a.in === "pop") c.scale.push([K(0, 0.6, "easeOut"), K(ad, 1)]);
     }
-    if (ad > 0 && a.out !== "none") {
+    if (ad > 0 && a.out !== "none" && a.out !== "typewriter") {
       c.opacity.push([K(dur - ad, 1, "easeIn"), K(dur, 0)]);
       if (a.out === "slideUp") c.y.push([K(dur - ad, 0, "easeIn"), K(dur, -H * 0.06)]);
       if (a.out === "slideDown") c.y.push([K(dur - ad, 0, "easeIn"), K(dur, H * 0.06)]);
@@ -108,6 +108,53 @@ export function layerCurves(clip: Clip, opts: { width: number; height: number; h
   }
   return c;
 }
+
+/** Characters of the text (newlines excluded), counted as code points. */
+export function textCharCount(clip: TextClip): number {
+  return clip.text.split(/\r?\n/).reduce((n, l) => n + Array.from(l).length, 0);
+}
+
+/**
+ * Typewriter reveal: how many characters (newlines excluded, code points) are
+ * visible at a clip-relative frame. Returns the full count when the clip has
+ * no typewriter animation. "in" types over the animation duration; "out"
+ * deletes characters over the last animation-duration frames.
+ */
+export function textReveal(clip: TextClip, frame: number): number {
+  const total = textCharCount(clip);
+  const dur = clip.duration;
+  const ad = Math.min(clip.animation.duration, Math.floor(dur / 2));
+  if (ad <= 0 || total === 0) return total;
+  let n = total;
+  if (clip.animation.in === "typewriter" && frame < ad) n = Math.min(n, Math.floor((total * (frame + 1)) / ad));
+  if (clip.animation.out === "typewriter" && frame >= dur - ad) n = Math.min(n, total - Math.floor((total * (frame - (dur - ad) + 1)) / ad));
+  return Math.max(0, n);
+}
+
+/** Split text into lines, each truncated so that `visible` characters show in total. */
+export function revealLines(text: string, visible: number): string[] {
+  let left = visible;
+  return text.split(/\r?\n/).map((line) => {
+    const chars = Array.from(line);
+    const take = Math.max(0, Math.min(chars.length, left));
+    left -= take;
+    return chars.slice(0, take).join("");
+  });
+}
+
+export type MaskShape = "left" | "right" | "up" | "down" | "iris";
+
+/** Layer mask of a wipe/iris transition: shape and progress 0..1 (eased), or null. */
+export function transitionMask(clip: Clip, frame: number): { shape: MaskShape; progress: number } | null {
+  const t = clip.transitionIn;
+  if (!t) return null;
+  const shape: MaskShape | undefined = ({ wipeLeft: "left", wipeRight: "right", wipeUp: "up", wipeDown: "down", iris: "iris" } as const)[t.type as "iris"];
+  if (!shape || frame >= t.duration) return null;
+  return { shape, progress: ease("easeInOut", Math.max(0, frame) / t.duration) };
+}
+
+/** Feather of mask edges as a fraction of the layer's width (shared by preview and export). */
+export const MASK_FEATHER = 0.03;
 
 export function evalCurve(curve: Curve, frame: number): number {
   const first = curve[0]!;

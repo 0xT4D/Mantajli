@@ -219,14 +219,19 @@ export const TRANSITIONS: TransitionSpec[] = [
   { type: "slideUp", label: "Slide Up", description: "Incoming shot slides in from the bottom.", needsOutgoing: true },
   { type: "slideDown", label: "Slide Down", description: "Incoming shot slides in from the top.", needsOutgoing: true },
   { type: "zoomIn", label: "Zoom Punch", description: "Incoming shot scales down from 130% while fading in.", needsOutgoing: true },
+  { type: "wipeLeft", label: "Wipe Left", description: "Soft edge sweeps right to left revealing the incoming shot.", needsOutgoing: true },
+  { type: "wipeRight", label: "Wipe Right", description: "Soft edge sweeps left to right revealing the incoming shot.", needsOutgoing: true },
+  { type: "wipeUp", label: "Wipe Up", description: "Soft edge sweeps bottom to top revealing the incoming shot.", needsOutgoing: true },
+  { type: "wipeDown", label: "Wipe Down", description: "Soft edge sweeps top to bottom revealing the incoming shot.", needsOutgoing: true },
+  { type: "iris", label: "Iris Open", description: "Circle grows from the centre revealing the incoming shot.", needsOutgoing: true },
 ];
 
 export const TRANSITION_TYPES = TRANSITIONS.map((t) => t.type);
 
 // ---------------------------------------------------------------------------
-// Text animations (implemented with FFmpeg drawtext expressions).
+// Text animations (curves in core/animation.ts; typewriter reveals characters, see textReveal).
 
-export const TEXT_ANIMATIONS = ["none", "fade", "slideUp", "slideDown", "slideLeft", "slideRight", "pop"] as const;
+export const TEXT_ANIMATIONS = ["none", "fade", "slideUp", "slideDown", "slideLeft", "slideRight", "pop", "typewriter"] as const;
 export type TextAnimation = (typeof TEXT_ANIMATIONS)[number];
 
 // ---------------------------------------------------------------------------
