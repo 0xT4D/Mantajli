@@ -87,4 +87,49 @@ describe("wipe/iris transitions and typewriter text", () => {
     expect(await textWidth((await engine.renderStill(29, { scale: 0.5 })).path)).toBe(0);
     expect(await textWidth((await engine.renderStill(10, { scale: 0.5 })).path)).toBe(wFull);
   });
+
+  it("renders shake and beat pulse exactly where the core curves put them", async () => {
+    const { evalLayer, layerCurves } = await import("@mantagli/core");
+    const dir = path.join(TMP, "motionfx");
+    await engine.closeProject();
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    await engine.createProject({ name: "MotionFX", format: "landscape", parentDir: dir });
+    const s = engine.requireSession();
+    const v1 = s.project.tracks.find((t) => t.name === "V1")!.id;
+    const c = s.dispatch("clip.add", { trackId: v1, clip: { type: "color", fill: "#ffffff", start: 0, duration: 40 } });
+    s.dispatch("clip.update", { clipId: c.clipId, props: { transform: { scale: 0.5 } } });
+    s.dispatch("marker.add", { frame: 10, kind: "beat" });
+
+    /** Bounding box of white pixels. */
+    const box = async (frame: number) => {
+      const px = await pixels((await engine.renderStill(frame, { scale: 0.25 })).path);
+      let [x0, x1, y0, y1] = [px.w, -1, px.h, -1];
+      for (let y = 0; y < px.h; y++)
+        for (let x = 0; x < px.w; x++) {
+          const [r, g, b] = px.at(x, y);
+          if (r + g + b > 600) [x0, x1, y0, y1] = [Math.min(x0, x), Math.max(x1, x), Math.min(y0, y), Math.max(y1, y)];
+        }
+      return { w: x1 - x0 + 1, cx: (x0 + x1 + 1) / 2, cy: (y0 + y1 + 1) / 2, W: px.w, H: px.h };
+    };
+
+    const fx = s.dispatch("effect.add", { clipId: c.clipId, type: "beatPulse", params: { zoom: 0.2, decay: 6 } });
+    const before = await box(9);
+    const onBeat = await box(10);
+    expect(onBeat.w / before.w).toBeCloseTo(1.2, 1);
+    expect((await box(20)).w).toBe(before.w);
+    // Moving the marker must invalidate the cached frame.
+    s.dispatch("marker.update", { markerId: s.project.markers[0]!.id, frame: 12 });
+    expect((await box(10)).w).toBe(before.w);
+    s.dispatch("effect.remove", { clipId: c.clipId, effectId: fx.effectId });
+
+    s.dispatch("effect.add", { clipId: c.clipId, type: "shake", params: { amount: 3, rotation: 0, seed: 4 } });
+    const clip = s.project.tracks.find((t) => t.id === v1)!.clips[0]!;
+    for (const f of [5, 17, 26]) {
+      const b = await box(f);
+      const st = evalLayer(layerCurves(clip, { width: b.W, height: b.H, hasOutgoing: false, fps: 30, markers: s.project.markers }), f);
+      expect(Math.abs(b.cx - (b.W / 2 + st.x))).toBeLessThan(1.5);
+      expect(Math.abs(b.cy - (b.H / 2 + st.y))).toBeLessThan(1.5);
+    }
+  });
 });

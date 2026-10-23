@@ -42,7 +42,67 @@ function kfCurve(clip: Clip, prop: KeyframeProperty, fallback: number): Curve {
   return [K(0, fallback)];
 }
 
-export function layerCurves(clip: Clip, opts: { width: number; height: number; hasOutgoing: boolean }): LayerCurves {
+export interface LayerCurveOptions {
+  /** Output size in pixels (slides and shake are built in output pixels). */
+  width: number;
+  height: number;
+  hasOutgoing: boolean;
+  fps?: number;
+  /** Timeline markers (absolute frames), used by beat-driven motion effects. */
+  markers?: readonly { frame: number; kind: string }[];
+}
+
+/** Deterministic value in [-1, 1] for (seed, index, channel). */
+function noise(seed: number, i: number, ch: number): number {
+  let h = (seed * 374761393 + i * 668265263 + ch * 2246822519) >>> 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177) >>> 0;
+  h = (h ^ (h >>> 16)) >>> 0;
+  return (h / 0xffffffff) * 2 - 1;
+}
+
+/** Curves added by motion effects (shake, beat pulse). */
+function motionCurves(clip: Clip, c: LayerCurves, opts: LayerCurveOptions) {
+  const dur = clip.duration;
+  const fps = opts.fps ?? 30;
+  for (const fx of clip.effects) {
+    if (!fx.enabled) continue;
+    const p = fx.params as Record<string, number | string>;
+    if (fx.type === "shake") {
+      const step = Math.max(1, Math.round(fps / Number(p.frequency)));
+      const amp = (Number(p.amount) / 100) * opts.width;
+      const seed = Number(p.seed);
+      const knots = (ch: number, scale: number): Curve => {
+        const pts: Curve = [];
+        for (let f = 0, i = 0; f <= dur + step; f += step, i++) pts.push(K(f, noise(seed, i, ch) * scale, "easeInOut"));
+        return pts;
+      };
+      if (amp > 0) {
+        c.x.push(knots(1, amp));
+        c.y.push(knots(2, amp * 0.75));
+      }
+      if (Number(p.rotation) > 0) c.rotation.push(knots(3, Number(p.rotation)));
+    } else if (fx.type === "beatPulse") {
+      const kinds = p.on === "downbeats" ? ["downbeat"] : p.on === "beats" ? ["beat", "downbeat"] : null;
+      const beats = (opts.markers ?? [])
+        .filter((m) => !kinds || kinds.includes(m.kind))
+        .map((m) => m.frame - clip.start)
+        .filter((f) => f >= 0 && f < dur)
+        .sort((a, b) => a - b);
+      const zoom = Number(p.zoom);
+      const decay = Number(p.decay);
+      if (!beats.length || zoom <= 0) continue;
+      const pts: Curve = [K(0, 1, "hold")];
+      beats.forEach((b, i) => {
+        const end = Math.min(b + decay, beats[i + 1] ?? Infinity);
+        if (b === 0) pts.length = 0;
+        pts.push(K(b, 1 + zoom, "easeOut"), K(end, 1 + zoom * (1 - Math.min(1, (end - b) / decay)), "hold"));
+      });
+      c.scale.push(pts);
+    }
+  }
+}
+
+export function layerCurves(clip: Clip, opts: LayerCurveOptions): LayerCurves {
   const { width: W, height: H } = opts;
   const dur = clip.duration;
   const c: LayerCurves = {
@@ -106,6 +166,7 @@ export function layerCurves(clip: Clip, opts: { width: number; height: number; h
       if (a.out === "pop") c.scale.push([K(dur - ad, 1, "easeIn"), K(dur, 0.6)]);
     }
   }
+  motionCurves(clip, c, opts);
   return c;
 }
 

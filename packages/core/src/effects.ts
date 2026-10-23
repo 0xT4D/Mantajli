@@ -16,10 +16,13 @@ export type ParamSpec =
 export interface EffectSpec {
   type: string;
   label: string;
-  category: "color" | "stylize" | "blur" | "transform";
+  category: "color" | "stylize" | "blur" | "transform" | "motion";
   description: string;
   params: ParamSpec[];
 }
+
+/** Motion effects add animation curves (core/animation.ts) instead of filters. */
+export const MOTION_EFFECTS = new Set(["shake", "beatPulse"]);
 
 export const EFFECTS: EffectSpec[] = [
   {
@@ -148,6 +151,29 @@ export const EFFECTS: EffectSpec[] = [
     params: [
       { key: "horizontal", label: "Horizontal", kind: "bool", default: true },
       { key: "vertical", label: "Vertical", kind: "bool", default: false },
+    ],
+  },
+  {
+    type: "shake",
+    label: "Camera Shake",
+    category: "motion",
+    description: "Smooth random handheld/impact shake of position and rotation. Combine with a slight scale-up to hide the edges.",
+    params: [
+      { key: "amount", label: "Amount", kind: "number", min: 0, max: 10, step: 0.1, default: 1.5, unit: "% width" },
+      { key: "frequency", label: "Frequency", kind: "number", min: 0.5, max: 30, step: 0.5, default: 8, unit: "Hz" },
+      { key: "rotation", label: "Rotation", kind: "number", min: 0, max: 15, step: 0.1, default: 1, unit: "°" },
+      { key: "seed", label: "Seed", kind: "number", min: 0, max: 999, step: 1, default: 1 },
+    ],
+  },
+  {
+    type: "beatPulse",
+    label: "Beat Pulse",
+    category: "motion",
+    description: "Zoom punch on every beat marker inside the clip, decaying back to normal.",
+    params: [
+      { key: "zoom", label: "Zoom", kind: "number", min: 0, max: 0.5, step: 0.01, default: 0.08 },
+      { key: "decay", label: "Decay", kind: "number", min: 1, max: 30, step: 1, default: 8, unit: "frames" },
+      { key: "on", label: "Markers", kind: "enum", options: ["beats", "downbeats", "all"], default: "beats" },
     ],
   },
 ];

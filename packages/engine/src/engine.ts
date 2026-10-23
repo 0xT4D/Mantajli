@@ -566,7 +566,9 @@ export class Engine extends EventEmitter {
       const sc = findScene(p, id);
       return sc ? sceneRenderKey({ project: p, scene: sc, quality: "draft", resolutionScale: 0 }) : id;
     });
-    return sha1(JSON.stringify({ plan: { ...plan, warnings: undefined }, assetSig, scenes, settings: p.settings, ...extra })).slice(0, 20);
+    // Beat-driven motion effects read the timeline markers.
+    const markers = plan.layers.some((l) => l.clip.effects.some((e) => e.enabled && e.type === "beatPulse")) ? p.markers.map((m) => [m.frame, m.kind]) : undefined;
+    return sha1(JSON.stringify({ plan: { ...plan, warnings: undefined }, assetSig, scenes, settings: p.settings, markers, ...extra })).slice(0, 20);
   }
 
   // ------------------------------------------------------------ export

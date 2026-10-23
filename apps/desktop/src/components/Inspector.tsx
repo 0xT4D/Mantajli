@@ -346,7 +346,7 @@ function EffectsSection({ clip, project }: { clip: Clip; project: Project }) {
           }}
         >
           <option value="">+ Add effect</option>
-          {(["color", "stylize", "blur", "transform"] as const).map((cat) => (
+          {(["color", "stylize", "blur", "transform", "motion"] as const).map((cat) => (
             <optgroup key={cat} label={cat}>
               {EFFECTS.filter((e) => e.category === cat).map((e) => (
                 <option key={e.type} value={e.type}>

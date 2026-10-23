@@ -95,7 +95,7 @@ export class LiveCompositor {
     for (const layer of plan.layers) {
       const clip = layer.clip;
       const clipFrame = layer.clipOffset;
-      const curves = layerCurves(clip, { width: W, height: H, hasOutgoing: layer.hasOutgoing });
+      const curves = layerCurves(clip, { width: W, height: H, hasOutgoing: layer.hasOutgoing, fps, markers: project.markers });
       const st = evalLayer(curves, clipFrame);
       // Keyframed x/y are in project pixels, the rest of the curves in canvas pixels.
       const base = curves.x[0]!;

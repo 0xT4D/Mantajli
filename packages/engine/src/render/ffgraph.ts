@@ -6,6 +6,7 @@ import {
   isConstant,
   layerCurves,
   MASK_FEATHER,
+  MOTION_EFFECTS,
   revealLines,
   textReveal,
   transitionMask,
@@ -344,7 +345,7 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     if (cr.left || cr.right || cr.top || cr.bottom)
       chain.push(`crop=w=iw*${n6(1 - cr.left - cr.right)}:h=ih*${n6(1 - cr.top - cr.bottom)}:x=iw*${n6(cr.left)}:y=ih*${n6(cr.top)}`);
 
-    const curves = layerCurves(clip, { width: W, height: H, hasOutgoing: layer.hasOutgoing });
+    const curves = layerCurves(clip, { width: W, height: H, hasOutgoing: layer.hasOutgoing, fps, markers: project.markers });
     // Curves were built in output pixels for slides; keyframed x/y are in project pixels.
     const T = plus("t", layer.clipOffset / fps); // clip-relative seconds inside the layer chain
     let sMax = 0;
@@ -367,7 +368,8 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     let cur = `${id}p`;
 
     // --- effects (alpha-preserving wrapper for layers with transparency)
-    const active = clip.effects.filter((e) => e.enabled);
+    // Motion effects are curves (applied below), not filters.
+    const active = clip.effects.filter((e) => e.enabled && !MOTION_EFFECTS.has(e.type));
     if (active.length) {
       if (hasAlpha) {
         stmts.push(`[${cur}]format=rgba,split=2[${id}c][${id}a]`);
