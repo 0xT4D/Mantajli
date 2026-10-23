@@ -1,6 +1,6 @@
 # Progress
 
-_Last updated: 2026-10-23 (session 1)_
+_Last updated: 2026-10-23 (session 2)_
 
 ## What works (verified this session)
 | Area | Verification |
@@ -22,9 +22,17 @@ _Last updated: 2026-10-23 (session 1)_
 | Release build + NSIS installer (23.5 MB) | `npx tauri build`; release exe launched, bundled engine running |
 | Preview cancellation leaves no cached output | cancelled a Blender preview mid-render via RPC |
 | OpenTimelineIO export/import: lossless Mantagli round trip, foreign OTIO (Clip.1, relative paths, gaps, dissolves), AI media boundary | `otio.e2e.test.ts`; Export dialog + RPC import checked in the UI (screenshots) |
+| Typewriter text, wipe left/right/up/down + iris transitions | `textfx.e2e` pixel checks; live vs exact screenshots |
+| Motion effects: camera shake, beat pulse (beat/downbeat markers) | `animation.test` + `textfx.e2e` (positions/scales match core curves within 1.5 px) |
+| Speed ramps (speed keyframes, 5 presets) | `speedramp.test` + `speedramp.e2e` (rendered frames = predicted source frames, PSNR) |
+| Blend modes (8), letterbox, glitch (jitter + RGB split) | `textfx.e2e` pixel values vs formulas; live channel split screenshot |
+| Music ducking under dialogue/SFX roles; loudness-normalised export | `animation.test` + `audio.e2e` (−12 dB dip measured; −14 LUFS via ebur128) |
+| 3D render quality presets; Cycles GPU device reported | `cycles.e2e` (Cycles frame rendered on GPU backend) |
+| Undo/redo history persisted across sessions | `history.test` |
+| MCP long calls: export_render wait capped at 45 s, export_status waitSeconds | `montage.e2e` (polls; export takes ~100 s on this machine now) |
 
-Test totals: `npm test` (runs unit + e2e projects) → 43 tests in 10 files, all passing (≈105 s, RTX 4060).
-`npm run typecheck` clean (fixed a stale MCP SDK result type in `mcp.test.ts`).
+Test totals: `npm test` (runs unit + e2e projects) → 61 tests in 17 files, all passing (≈150 s, RTX 4060).
+`npm run typecheck` clean.
 
 ## Known gaps / limitations
 - In-app Director never ran against the real Claude API (no API key on this machine). Request
@@ -32,8 +40,13 @@ Test totals: `npm test` (runs unit + e2e projects) → 43 tests in 10 files, all
   current API docs but is unverified live. MCP path is verified.
 - Live preview shows 3D clips only after "Render 3D previews"; colour effects are approximated
   live (exact when paused/rendered).
-- Undo history is per process (not persisted). Op log persists (`oplog.jsonl`).
-- No typewriter text, no wipe transitions.
+- Undo history persists in `history.json` (dropped if project.json was changed outside Mantagli).
+- Speed-ramped clips mute their own audio (no variable-rate audio). Live preview approximates
+  ramps via playbackRate + drift correction; paused frames are exact.
+- Blend modes and wipes are exact in the export; the live preview uses canvas equivalents (wipes
+  without feathered edges).
+- Composition (FFmpeg) is CPU-bound: ~3 fps for 1080×1920 with looks; an 8 s reel exports in
+  ~100 s on this machine (was faster earlier in the session; cause not found, no code regression).
 - OTIO: flat tracks only (nested stacks skipped with a warning); non-Mantagli transitions import as
   crossfade; third-party effects other than LinearTimeWarp are ignored. Media imported by an OTIO
   import is not removed by undoing it (same as normal imports). Not yet opened in Resolve/otioview.

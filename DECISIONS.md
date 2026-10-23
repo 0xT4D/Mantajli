@@ -89,3 +89,32 @@ while other tools see standard clips. Mantagli's "transition plays over the head
 clip" maps to `in_offset = 0, out_offset = duration`. Import adds new tracks in one transaction
 (one undo step); media import happens before it and is not undone. AI/MCP imports enforce the D12
 media boundary on every referenced file, not only on the .otio itself.
+
+## D14 — Motion and per-frame effects live in core curves
+Camera shake, beat pulse and glitch jitter are generated as animation curves in
+`core/animation.ts` (seeded deterministic noise, beat markers), so FFmpeg and the live canvas
+render them from one source. Frame-varying filter parameters (glitch RGB split, opacity) are
+sampled per frame and driven by `sendcmd`. Typewriter text uses one `drawtext` per (line,
+visible prefix) with `enable=` ranges; wipes/iris use a `geq` alpha mask enabled only during the
+transition. Letterbox bars are drawn on the composite (frame coordinates) after the layer.
+
+## D15 — Speed ramps are speed keyframes integrated per frame
+`speed` is a keyframe property. Source time = sourceIn + Σ speed(frame midpoint)/fps
+(`timeline.ts: sourceOffset`), used by the plan, trims/splits, clamping and the preview. FFmpeg
+remaps with a flat `setpts` sum of clamped linear pieces (≤ ~120), seeking slightly early and
+keeping exact PTS, with `fps=round=up` so each output frame shows the latest source frame at or
+before its source time (player semantics). Ramped clips mute their own audio (plan warning).
+Trims/splits insert boundary keys so every keyframed curve keeps its shape.
+
+## D16 — Blend modes via blend + alphamerge
+Non-normal layers are placed on a transparent full frame, `blend`ed with the base (base as the
+"top" input so overlay/soft light follow Photoshop semantics), then merged over the base through
+the layer's alpha so transparency and opacity leave the base untouched. Canvas uses
+`globalCompositeOperation`.
+
+## D17 — Ducking from clip timing; persistent history as a Merkle store
+Ducking is computed from dialogue/SFX-role clip spans (not audio level): deterministic, cheap,
+identical in preview and export, and editable as a dB envelope with attack/release. Undo history
+persists as content-addressed JSON subtrees (hash cached per immutable object) and is restored
+only when the stored head matches the project.json text — stale history is dropped, never
+applied. MCP tool calls block ≤ 45 s (clients time out at 60 s); long work is polled.

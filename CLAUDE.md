@@ -42,7 +42,11 @@ scripts/          Dev utilities (demo project, UI screenshots via Edge, rpc help
 - Drive C: is nearly full. Toolchains live on D:: Blender `D:\DevTools\blender-5.2.3`,
   Rust `D:\DevTools\rustup` + `D:\DevTools\cargo` (GNU toolchain default, MSVC Build Tools
   could not be installed for lack of space), npm cache `D:\DevTools\npm-cache`,
-  `node_modules` is a junction to `D:\DevTools\mantagli-node_modules`.
+  `node_modules` is a real folder in the repo (an older copy exists at `D:\DevTools\mantagli-node_modules`).
+  Workspace packages resolve via `node_modules/@mantagli/*` links to this checkout, so a git
+  worktree sharing it still runs this checkout's core/engine code.
+- Shell edits: Git Bash and `node -e` can eat backslashes in regexes/escapes (`\n`, `\W`). Use the
+  Edit tool for code containing escapes.
 - FFmpeg 8.1 (gyan essentials) on PATH. Node 22.18.
 - `tests/.tmp/` holds generated media, test projects and an isolated `MANTAGLI_HOME`.
 
