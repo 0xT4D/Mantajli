@@ -118,3 +118,12 @@ identical in preview and export, and editable as a dB envelope with attack/relea
 persists as content-addressed JSON subtrees (hash cached per immutable object) and is restored
 only when the stored head matches the project.json text — stale history is dropped, never
 applied. MCP tool calls block ≤ 45 s (clients time out at 60 s); long work is polled.
+
+## D18 — Composite commands and per-clip time mapping
+Bulk edits that need fresh clip ids (auto edit to beats, freeze frame) are core commands that
+call other commands through `sub()` (params validated, one undo step). `sourceTimeAt(clip,
+frame)` is the single forward/reverse/freeze time mapping. Reverse keeps the clip's source range
+and shows it backwards, so trimming the end of a reversed clip moves its in-point. Chroma key
+derives the matte from ungraded pixels in a separate graph branch; the preview keys per pixel with
+the same U/V-distance formula (`chromaKeyAlpha`). Captions are plain text clips on a "Captions"
+text track (styles sized from the frame); SRT export reads any text track back.

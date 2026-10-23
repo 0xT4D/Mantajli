@@ -30,8 +30,12 @@ _Last updated: 2026-10-23 (session 2)_
 | 3D render quality presets; Cycles GPU device reported | `cycles.e2e` (Cycles frame rendered on GPU backend) |
 | Undo/redo history persisted across sessions | `history.test` |
 | MCP long calls: export_render wait capped at 45 s, export_status waitSeconds | `montage.e2e` (polls; export takes ~100 s on this machine now) |
+| Captions: SRT/WebVTT import (4 styles, safe-zone aware), SRT export | `captions.test`, `ai.test`; rendered caption looks viewed |
+| Auto edit to beats (timeline.autoEdit, dialog, AI tool) | `speedramp.test`; run from the UI on the MCP montage project |
+| Reverse clips (incl. audio) and freeze frames (ripple) | `speedramp.test` + `speedramp.e2e` (PSNR per frame, audio RMS) |
+| Chroma key with despill; live per-pixel key | `textfx.e2e` pixel checks; live vs exact screenshot |
 
-Test totals: `npm test` (runs unit + e2e projects) → 61 tests in 17 files, all passing (≈150 s, RTX 4060).
+Test totals: `npm test` (runs unit + e2e projects) → 71 tests in 18 files, all passing (≈160 s, RTX 4060).
 `npm run typecheck` clean.
 
 ## Known gaps / limitations
@@ -43,6 +47,8 @@ Test totals: `npm test` (runs unit + e2e projects) → 61 tests in 17 files, all
 - Undo history persists in `history.json` (dropped if project.json was changed outside Mantagli).
 - Speed-ramped clips mute their own audio (no variable-rate audio). Live preview approximates
   ramps via playbackRate + drift correction; paused frames are exact.
+- Reversed clip audio is silent in the live preview (exact in renders); reverse/freeze cannot be
+  combined with speed ramps.
 - Blend modes and wipes are exact in the export; the live preview uses canvas equivalents (wipes
   without feathered edges).
 - Composition (FFmpeg) is CPU-bound: ~3 fps for 1080×1920 with looks; an 8 s reel exports in

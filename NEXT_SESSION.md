@@ -15,18 +15,20 @@ committed per feature on `main`.
    `source scripts/tauri-env.sh && cd apps/desktop && npx tauri build` (~15 min, LTO).
    Rebuild the installer to ship session-2 features; not yet tested on a clean machine.
 
-## Session 2 added (all committed, see DECISIONS D13–D17)
+## Session 2 added (all committed, see DECISIONS D13–D18)
 OTIO interchange · typewriter text · wipe/iris transitions · camera shake + beat pulse (motion
 effects as curves) · speed ramps (speed keyframes, presets) · blend modes · letterbox · glitch ·
 music ducking + loudness-normalised export · 3D render quality presets + Cycles device in status
-bar · persistent undo history · MCP waits capped at 45 s (`export_status waitSeconds`).
+bar · persistent undo history · MCP waits capped at 45 s (`export_status waitSeconds`) ·
+captions (SRT/VTT in, SRT out) · auto edit to beats · reverse + freeze frame · chroma key.
 
 ## Highest-value next steps
 1. Live Director run with a real API key (user must provide one): run a brief on the demo
    project (`npx tsx scripts/make-demo.ts tests/.tmp/demo`), watch for API 400s on the request
    shape in `packages/engine/src/ai/director.ts` (`fallbacks`, `output_config`, `thinking`).
-2. M10 candidates (see TASKS.md): SRT captions import → styled text clips, one-click
-   "auto-edit to beats" in the UI, freeze frame / reverse clips, chroma key.
+2. Ideas not started: shape/garbage masks, auto-reframe (horizontal → vertical with a tracked
+   crop), speech-to-text captions (needs a local Whisper model), adjustment layers, text presets
+   / animated title templates, LUT browser.
 3. Rebuild + install the NSIS package; validate an exported .otio with Python `opentimelineio`.
 4. Optional: persist job history; investigate why FFmpeg composition got slower (~3 fps at
    1080×1920 with looks) during session 2 — the same commit was faster earlier.
