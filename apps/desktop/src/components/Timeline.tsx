@@ -266,8 +266,25 @@ function TimelineInner({ project }: { project: Project }) {
         <div className="shrink-0 overflow-hidden border-r border-line" style={{ width: HEADER_W }}>
           <div style={{ height: RULER_H }} className="border-b border-line" />
           <div style={{ transform: `translateY(${-(scrollRef.current?.scrollTop ?? 0)}px)` }}>
-            {project.tracks.map((t) => (
-              <TrackHeader key={t.id} track={t} selected={selection.kind === "track" && selection.id === t.id} />
+            {project.tracks.map((t, i) => (
+              <TrackHeader
+                key={t.id}
+                track={t}
+                selected={selection.kind === "track" && selection.id === t.id}
+                onReorderStart={(startY) => {
+                  // Drag the header vertically to reorder; drop index from the pointer row.
+                  const up = (ev: PointerEvent) => {
+                    window.removeEventListener("pointerup", up);
+                    const dy = ev.clientY - startY;
+                    if (Math.abs(dy) < 6) return;
+                    const y = trackTops.tops[t.id]! + TRACK_H[t.kind] / 2 + dy;
+                    // New index = number of other tracks whose midpoint is above the drop point.
+                    const target = project.tracks.filter((o) => o.id !== t.id && trackTops.tops[o.id]! + TRACK_H[o.kind] / 2 < y).length;
+                    if (target !== i) void dispatch("track.move", { trackId: t.id, index: target }, "Reorder track").catch(() => {});
+                  };
+                  window.addEventListener("pointerup", up);
+                }}
+              />
             ))}
           </div>
         </div>
@@ -419,7 +436,7 @@ function AddTrackMenu({ onAdd }: { onAdd: (k: Track["kind"]) => void }) {
   );
 }
 
-function TrackHeader({ track, selected }: { track: Track; selected: boolean }) {
+function TrackHeader({ track, selected, onReorderStart }: { track: Track; selected: boolean; onReorderStart: (y: number) => void }) {
   const { dispatch, setSelection } = useStudio();
   const upd = (patch: Record<string, unknown>, label: string) => void dispatch("track.update", { trackId: track.id, ...patch }, label).catch(() => {});
   const icon = track.kind === "audio" ? <AudioLines size={13} /> : track.kind === "text" ? <Type size={13} /> : track.kind === "scene" ? <Box size={13} /> : <Film size={13} />;
@@ -429,7 +446,9 @@ function TrackHeader({ track, selected }: { track: Track; selected: boolean }) {
       style={{ height: TRACK_H[track.kind] }}
       onClick={() => setSelection({ kind: "track", id: track.id })}
     >
-      <span className="text-mute">{icon}</span>
+      <span className="cursor-grab text-mute" title="Drag to reorder" onPointerDown={(e) => (e.stopPropagation(), onReorderStart(e.clientY))}>
+        {icon}
+      </span>
       <span className="min-w-0 flex-1 truncate text-[11px] font-medium" title={track.name}>
         {track.name}
         {track.role === "music" && <span className="ml-1 text-[9px] text-mute">♪</span>}

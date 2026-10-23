@@ -16,7 +16,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Timeline (move across tracks, trim, split, ripple delete, duplicate, snapping, zoom,
       markers, waveforms, filmstrips, context menu, drop from bin)
 - [x] Keyboard shortcuts, toasts, dialogs (new/open/export/settings), welcome screen
-- [ ] Track reordering by drag (command exists: track.move)
+- [x] Track reordering by dragging the header icon
 - [x] Marker dragging on the ruler (beat corrections), plus exact frame in inspector
 - [ ] Curve/graph editor for keyframes (keyframes list + diamonds only)
 
