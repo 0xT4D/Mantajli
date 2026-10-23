@@ -41,6 +41,7 @@ function loadWaveform(assetId: string, rel?: string) {
 type DragState =
   | { kind: "move"; clipIds: string[]; anchorId: string; startX: number; startY: number; origStart: number; origTrack: string; deltaFrames: number; targetTrack: string; moved: boolean }
   | { kind: "trim"; clipId: string; edge: "start" | "end"; startX: number; frame: number; orig: number }
+  | { kind: "marker"; id: string; startX: number; orig: number; frame: number }
   | { kind: "scrub" };
 
 function niceStep(pxPerFrame: number, fps: number): { major: number; minor: number } {
@@ -140,6 +141,10 @@ function TimelineInner({ project }: { project: Project }) {
         const t = trackAtY(e.clientY);
         setDrag({ ...drag, deltaFrames: delta, targetTrack: t && drag.clipIds.length === 1 && t.kind !== "audio" === (anchor.track.kind !== "audio") ? t.id : drag.origTrack, moved: drag.moved || Math.abs(e.clientX - drag.startX) > 3 || Math.abs(e.clientY - drag.startY) > 3 });
       }
+      if (drag.kind === "marker") {
+        setDrag({ ...drag, frame: Math.max(0, drag.orig + Math.round((e.clientX - drag.startX) / zoom)) });
+        return;
+      }
       if (drag.kind === "trim") {
         const f = snap(Math.max(0, drag.orig + Math.round((e.clientX - drag.startX) / zoom)), [drag.orig]);
         setDrag({ ...drag, frame: f });
@@ -155,6 +160,7 @@ function TimelineInner({ project }: { project: Project }) {
         });
         await transaction(cmds.length > 1 ? `Move ${cmds.length} clips` : "Move clip", cmds).catch(() => {});
       }
+      if (d.kind === "marker" && d.frame !== d.orig) await dispatch("marker.update", { markerId: d.id, frame: d.frame }, "Move marker").catch(() => {});
       if (d.kind === "trim" && d.frame !== d.orig) await dispatch("clip.trim", { clipId: d.clipId, edge: d.edge, frame: d.frame }, `Trim ${d.edge}`).catch(() => {});
     };
     window.addEventListener("pointermove", move);
@@ -296,12 +302,13 @@ function TimelineInner({ project }: { project: Project }) {
                 <div
                   key={m.id}
                   title={`${m.kind}${m.label ? `: ${m.label}` : ""} @ ${m.frame}`}
-                  className="absolute bottom-0 cursor-pointer"
-                  style={{ left: m.frame * zoom - 3 }}
+                  className="absolute bottom-0 cursor-ew-resize p-0.5"
+                  style={{ left: (drag?.kind === "marker" && drag.id === m.id ? drag.frame : m.frame) * zoom - 5 }}
                   onPointerDown={(e) => {
                     e.stopPropagation();
                     setPlayhead(m.frame);
                     setSelection({ kind: "marker", id: m.id });
+                    setDrag({ kind: "marker", id: m.id, startX: e.clientX, orig: m.frame, frame: m.frame });
                   }}
                 >
                   <div

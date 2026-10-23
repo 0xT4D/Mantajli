@@ -17,7 +17,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
       markers, waveforms, filmstrips, context menu, drop from bin)
 - [x] Keyboard shortcuts, toasts, dialogs (new/open/export/settings), welcome screen
 - [ ] Track reordering by drag (command exists: track.move)
-- [ ] Marker dragging on the ruler (inspector edits frame)
+- [x] Marker dragging on the ruler (beat corrections), plus exact frame in inspector
 - [ ] Curve/graph editor for keyframes (keyframes list + diamonds only)
 
 ## M3 Media engine
