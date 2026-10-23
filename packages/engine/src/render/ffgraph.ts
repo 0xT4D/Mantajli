@@ -12,6 +12,7 @@ import {
   type Project,
   type TextClip,
   type VisualLayer,
+  TEXT_LINE_HEIGHT,
 } from "@mantagli/core";
 
 /**
@@ -280,28 +281,35 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
         fullFrame = true;
         break;
       case "text": {
-        const textName = `${id}.txt`;
-        ctx.writeFile(textName, clip.text);
         const s = clip.style;
         const font = ctx.fontFile(clip);
         const fontOpt = font ? `fontfile=${filterPath(font)}` : `font='${s.fontFamily.replace(/'/g, "")}${s.bold ? "\\:style=Bold" : ""}'`;
         const margin = Math.round(W * 0.08);
         const x = s.align === "left" ? `${margin}` : s.align === "right" ? `w-text_w-${margin}` : "(w-text_w)/2";
-        const opts = [
-          fontOpt,
-          `textfile=${textName}`,
-          "expansion=none",
-          `fontsize=${n6(s.fontSize * px)}`,
-          `fontcolor=${hex(s.color)}`,
-          `x=${x}`,
-          "y=(h-text_h)/2",
-          `text_align=${s.align === "left" ? "L" : s.align === "right" ? "R" : "C"}`,
-          "line_spacing=" + Math.round(s.fontSize * px * 0.15),
-        ];
-        if (s.strokeWidth > 0) opts.push(`borderw=${n6(s.strokeWidth * px)}`, `bordercolor=${hex(s.strokeColor)}`);
-        if (s.shadow) opts.push(`shadowx=${Math.max(1, Math.round(4 * px))}`, `shadowy=${Math.max(1, Math.round(4 * px))}`, `shadowcolor=${hex(s.shadowColor)}@0.6`);
-        if (s.box) opts.push("box=1", `boxcolor=${hex(s.boxColor)}@${n6(s.boxOpacity)}`, `boxborderw=${Math.round(s.fontSize * px * 0.35)}`);
-        stmts.push(`color=c=black@0:s=${W}x${H}:r=${fpsR}:d=${n6(layerSec + 1)},format=rgba,drawtext=${opts.join(":")}[${src}]`);
+        // One drawtext per line: drawtext renders "\n" as a missing glyph with
+        // this FFmpeg build. Lines sit on a fixed grid (same as the live preview).
+        const lines = clip.text.split(/\r?\n/);
+        const size = s.fontSize * px;
+        const lh = size * TEXT_LINE_HEIGHT;
+        const top = (H - lh * lines.length) / 2;
+        const draws = lines.map((line, i) => {
+          const name = `${id}_${i}.txt`;
+          ctx.writeFile(name, line.length ? line : " ");
+          const opts = [
+            fontOpt,
+            `textfile=${name}`,
+            "expansion=none",
+            `fontsize=${n6(size)}`,
+            `fontcolor=${hex(s.color)}`,
+            `x=${x}`,
+            `y=${n6(top + i * lh)}+(${n6(lh)}-(ascent-descent))/2`,
+          ];
+          if (s.strokeWidth > 0) opts.push(`borderw=${n6(s.strokeWidth * px)}`, `bordercolor=${hex(s.strokeColor)}`);
+          if (s.shadow) opts.push(`shadowx=${Math.max(1, Math.round(4 * px))}`, `shadowy=${Math.max(1, Math.round(4 * px))}`, `shadowcolor=${hex(s.shadowColor)}@0.6`);
+          if (s.box) opts.push("box=1", `boxcolor=${hex(s.boxColor)}@${n6(s.boxOpacity)}`, `boxborderw=${Math.round(size * 0.35)}`);
+          return `drawtext=${opts.join(":")}`;
+        });
+        stmts.push(`color=c=black@0:s=${W}x${H}:r=${fpsR}:d=${n6(layerSec + 1)},format=rgba,${draws.join(",")}[${src}]`);
         hasAlpha = true;
         fullFrame = true;
         break;
@@ -353,18 +361,11 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
       }
     }
 
-    // --- rotate, animated scale, opacity, shift
+    // --- opacity, rotate, animated scale, shift
+    // Order matters: filters after a per-frame `scale` keep the size they were
+    // configured with and would crop later (larger) frames. Opacity therefore
+    // runs first; only rotate (fixed canvas) and setpts may follow the scale.
     const post: string[] = ["format=rgba"];
-    const rotAnimated = animated(curves.rotation);
-    const rot0 = evalLayer(curves, layer.clipOffset).rotation;
-    if (rotAnimated || Math.abs(rot0) > 1e-6) {
-      const a = rotAnimated ? `(${sumExpr(curves.rotation, T, fps, 1)})*PI/180` : n6((rot0 * Math.PI) / 180);
-      post.push(`rotate=a='${a}':ow='hypot(iw,ih)':oh='hypot(iw,ih)':c=black@0`);
-    }
-    if (scaleAnimated) {
-      const s = `(${prodExpr(curves.scale, T, fps)})/${n6(sMax)}`;
-      post.push(`scale=w='max(2,trunc(iw*${s}/2)*2)':h='max(2,trunc(ih*${s}/2)*2)':eval=frame`);
-    }
     // Opacity is sampled per frame (exact match with the live preview) and
     // driven through sendcmd when it changes.
     const op: number[] = [];
@@ -381,6 +382,16 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
       post.push(`sendcmd=f=${id}op.cmd`, `colorchannelmixer@${id}op=aa=${n6(op[0]!)}`);
     } else if (op[0]! < 0.999) {
       post.push(`colorchannelmixer=aa=${n6(op[0]!)}`);
+    }
+    const rotAnimated = animated(curves.rotation);
+    const rot0 = evalLayer(curves, layer.clipOffset).rotation;
+    if (rotAnimated || Math.abs(rot0) > 1e-6) {
+      const a = rotAnimated ? `(${sumExpr(curves.rotation, T, fps, 1)})*PI/180` : n6((rot0 * Math.PI) / 180);
+      post.push(`rotate=a='${a}':ow='hypot(iw,ih)':oh='hypot(iw,ih)':c=black@0`);
+    }
+    if (scaleAnimated) {
+      const s = `(${prodExpr(curves.scale, T, fps)})/${n6(sMax)}`;
+      post.push(`scale=w='max(2,trunc(iw*${s}/2)*2)':h='max(2,trunc(ih*${s}/2)*2)':eval=frame`);
     }
     const shift = (layer.start - plan.rangeStart) / fps;
     post.push(`setpts=PTS+${n6(shift)}/TB`);

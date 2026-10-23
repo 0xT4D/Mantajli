@@ -1,4 +1,4 @@
-import { buildCompositionPlan, evalLayer, findAsset, fpsValue, layerCurves, type Asset, type Clip, type Project, type VisualLayer } from "@mantagli/core";
+import { buildCompositionPlan, evalLayer, findAsset, fpsValue, layerCurves, TEXT_LINE_HEIGHT, type Asset, type Clip, type Project, type VisualLayer } from "@mantagli/core";
 import { engine } from "../engine/client";
 
 /**
@@ -259,7 +259,7 @@ function drawText(ctx: CanvasRenderingContext2D, clip: Clip & { type: "text" }, 
   ctx.font = `${s.bold ? "700" : "400"} ${size}px "${s.fontFamily}", sans-serif`;
   ctx.textBaseline = "middle";
   const lines = clip.text.split("\n");
-  const lh = size * 1.15;
+  const lh = size * TEXT_LINE_HEIGHT;
   const margin = W * 0.08;
   const total = lh * lines.length;
   ctx.textAlign = s.align;

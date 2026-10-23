@@ -1,0 +1,8 @@
+# C: is nearly full on the development machine; keep build output on D:.
+[build]
+target-dir = "D:/DevTools/mantagli-target"
+
+# GNU toolchain (MSVC Build Tools could not be installed: C: is full).
+# rustup self-contained dlltool lacks `as`; MSYS2 binutils (D:/DevTools/mingw-binutils) is used.
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-C", "dlltool=D:/DevTools/mingw-binutils/mingw64/bin/dlltool.exe"]

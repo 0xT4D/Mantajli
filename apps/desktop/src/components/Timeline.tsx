@@ -21,6 +21,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { clipEnd, formatTimecode, fpsValue, projectDuration, TRANSITIONS, type Asset, type Clip, type Project, type Track } from "@mantagli/core";
 import { engine } from "../engine/client";
+import { BIN_DROP_EVENT, useBinDrag, type BinDropDetail } from "../lib/binDrag";
 import { projectFile, useStudio } from "../store/studio";
 import { cx, IconButton } from "./ui";
 
@@ -29,8 +30,6 @@ const RULER_H = 26;
 const TRACK_H: Record<Track["kind"], number> = { video: 58, scene: 50, text: 36, audio: 50 };
 const CLIP_COLORS: Record<string, string> = { media: "var(--color-clip-video)", text: "var(--color-clip-text)", scene: "var(--color-clip-scene)", color: "var(--color-clip-color)", audio: "var(--color-clip-audio)" };
 
-export const DRAG_ASSET = "application/x-mantagli-asset";
-export const DRAG_SCENE = "application/x-mantagli-scene";
 
 const waveformCache = new Map<string, Promise<{ peaksPerSecond: number; peaks: number[] } | null>>();
 function loadWaveform(assetId: string, rel?: string) {
@@ -187,37 +186,45 @@ function TimelineInner({ project }: { project: Project }) {
     }
   };
 
-  // ----- drop from media browser
-  const onDragOver = (e: React.DragEvent) => {
-    if (!e.dataTransfer.types.includes(DRAG_ASSET) && !e.dataTransfer.types.includes(DRAG_SCENE)) return;
-    e.preventDefault();
-    const t = trackAtY(e.clientY);
-    if (t) setDropHint({ trackId: t.id, frame: snap(frameAtX(e.clientX)) });
+  // ----- drop from media browser (pointer-based, see lib/binDrag.ts)
+  const binDrag = useBinDrag();
+  const overLanes = (x: number, y: number) => {
+    const r = scrollRef.current?.getBoundingClientRect();
+    return !!r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
   };
-  const onDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setDropHint(null);
-    const frame = snap(frameAtX(e.clientX));
-    let track = trackAtY(e.clientY);
-    const assetId = e.dataTransfer.getData(DRAG_ASSET);
-    const sceneId = e.dataTransfer.getData(DRAG_SCENE);
-    if (assetId) {
-      const asset = project.assets.find((a) => a.id === assetId);
-      if (!asset) return;
-      if (!["video", "audio", "image"].includes(asset.kind)) {
-        useStudio.getState().toast("info", `${asset.kind} assets are used inside 3D scenes or effects, not directly on the timeline`);
-        return;
+  useEffect(() => {
+    if (binDrag.payload && overLanes(binDrag.x, binDrag.y)) {
+      const t = trackAtY(binDrag.y);
+      setDropHint(t ? { trackId: t.id, frame: snap(frameAtX(binDrag.x)) } : null);
+    } else setDropHint(null);
+  }, [binDrag, trackAtY, frameAtX, snap]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const onDrop = async (ev: Event) => {
+      const { payload, x, y } = (ev as CustomEvent<BinDropDetail>).detail;
+      setDropHint(null);
+      if (!overLanes(x, y)) return;
+      const frame = snap(frameAtX(x));
+      let track = trackAtY(y);
+      if (payload.kind === "asset") {
+        const asset = project.assets.find((a) => a.id === payload.id);
+        if (!asset) return;
+        if (!["video", "audio", "image"].includes(asset.kind)) {
+          useStudio.getState().toast("info", `${asset.kind} assets are used inside 3D scenes or effects, not directly on the timeline`);
+          return;
+        }
+        const wantAudio = asset.kind === "audio";
+        if (!track || (track.kind === "audio") !== wantAudio || track.locked) track = project.tracks.find((t) => (t.kind === "audio") === wantAudio && !t.locked);
+        if (!track) return;
+        await dispatch("clip.add", { trackId: track.id, clip: { type: "media", assetId: asset.id, start: frame } }, `Add ${asset.name}`).catch(() => {});
+      } else {
+        if (!track || track.kind === "audio" || track.locked) track = project.tracks.find((t) => t.kind !== "audio" && !t.locked);
+        if (!track) return;
+        await dispatch("clip.add", { trackId: track.id, clip: { type: "scene", sceneId: payload.id, start: frame } }, "Add 3D scene").catch(() => {});
       }
-      const wantAudio = asset.kind === "audio";
-      if (!track || (track.kind === "audio") !== wantAudio) track = project.tracks.find((t) => (t.kind === "audio") === wantAudio && !t.locked);
-      if (!track) return;
-      await dispatch("clip.add", { trackId: track.id, clip: { type: "media", assetId, start: frame } }, `Add ${asset.name}`).catch(() => {});
-    } else if (sceneId) {
-      if (!track || track.kind === "audio") track = project.tracks.find((t) => t.kind !== "audio" && !t.locked);
-      if (!track) return;
-      await dispatch("clip.add", { trackId: track.id, clip: { type: "scene", sceneId, start: frame } }, "Add 3D scene").catch(() => {});
-    }
-  };
+    };
+    window.addEventListener(BIN_DROP_EVENT, onDrop);
+    return () => window.removeEventListener(BIN_DROP_EVENT, onDrop);
+  }, [project, snap, frameAtX, trackAtY, dispatch]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { major, minor } = niceStep(zoom, fps);
   const scrollLeft = scrollRef.current?.scrollLeft ?? 0;
@@ -265,9 +272,6 @@ function TimelineInner({ project }: { project: Project }) {
           className="relative min-w-0 flex-1 overflow-auto"
           onWheel={onWheel}
           onScroll={() => force((n) => n + 1)}
-          onDragOver={onDragOver}
-          onDragLeave={() => setDropHint(null)}
-          onDrop={onDrop}
           onPointerDown={(e) => {
             if (e.target === e.currentTarget || (e.target as HTMLElement).dataset.lane) setSelection({ kind: "none" });
           }}

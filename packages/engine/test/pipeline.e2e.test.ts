@@ -13,13 +13,15 @@ import { makeFixtures, TMP } from "./fixtures.js";
  * imports media, edits the timeline, renders a 3D scene, previews, exports
  * and verifies the result.
  */
+// Must be set before any Engine is constructed (settings path is resolved then).
+process.env.MANTAGLI_HOME = path.join(TMP, "home");
+
 describe("end-to-end pipeline", () => {
   const engine = new Engine();
   let media: Awaited<ReturnType<typeof makeFixtures>>;
   const projectsDir = path.join(TMP, "projects");
 
   beforeAll(async () => {
-    process.env.MANTAGLI_HOME = path.join(TMP, "home");
     media = await makeFixtures();
     await rm(projectsDir, { recursive: true, force: true });
     await engine.init();

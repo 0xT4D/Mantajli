@@ -1,0 +1,81 @@
+# Architecture decisions
+
+## D1 — One TypeScript engine shared by UI, AI Director and MCP (2026-10-23)
+The editing engine (project model, media, rendering orchestration, AI tools) is TypeScript
+running in a Node process ("engine host"). The UI, the in-app Claude Director and the MCP
+server all drive the *same* tool layer and the *same* live session, so Claude Code edits are
+visible in the app and share one undo history.
+Why: the official MCP SDK and Anthropic SDK are first-class in TS; core commands are pure TS
+and testable without native toolchains; one implementation instead of Rust+TS duplicates.
+Rust (Tauri) keeps: window/shell, native dialogs, OS keychain for the API key, supervising the
+engine process. Deviation from "Rust for project access/job orchestration" is deliberate.
+
+## D2 — Engine host transport: localhost WebSocket + HTTP with a random token
+Bound to 127.0.0.1, 192-bit random token on every request (timing-safe compare), files served
+only if inside the project folder or an asset of the open project. Connection info is written
+to `%APPDATA%/Mantagli/engine.json` (user-only location) so the MCP bridge can connect.
+Why: works identically in Tauri and in a dev browser, supports ranged video streaming for
+`<video>`, no Tauri asset-scope plumbing.
+
+## D3 — Immutable project + snapshot undo
+Project state is an immutable immer tree; every command produces a new tree. History stores
+before/after snapshots (structural sharing keeps them cheap). Transactions group commands into
+one undo step and are atomic (failure leaves state untouched). Asset bookkeeping (derived files,
+analysis, status) is carried forward across undo so undo never "forgets" a proxy.
+
+## D4 — Folder-based project, continuous atomic saves
+`<Name>.mantagli/project.json` + `backups/` (rotating, max 25) + `cache/` + `exports/` +
+`scenes/*.blend` + `oplog.jsonl`. Every change autosaves (debounced 1.2 s) via temp-file + fsync
++ rename. Corrupt project.json → automatic recovery from newest valid backup (corrupt file kept).
+A `.lock` with PID prevents two engines editing one project.
+
+## D5 — Composition via one explicit FFmpeg filter graph
+Background canvas + every visual layer overlaid bottom-up (`overlay` with shifted PTS).
+Per layer: decode with input seeking → retime → fixed frame count (tpad/trim) → crop → fit
+scale → effects (alpha-preserving wrapper for layers with transparency) → RGBA → rotate (fixed
+canvas, transparent fill) → animated scale → opacity via sendcmd → shift → overlay with
+expression-driven x/y. Compositing in RGB, single BT.709 conversion at the end, output tagged
+BT.709. Audio: per-segment trims, atempo, gain/fade expressions, adelay, amix (no normalize),
+limiter. Not a concat — the timeline is rendered as a real composition.
+
+## D6 — Shared animation curves
+`core/animation.ts` turns keyframes, fades, transitions and text animations into curves
+(x/y/rotation additive, scale/opacity multiplicative). FFmpeg expressions and the live canvas
+preview are generated from the same curves. Opacity is sampled per frame and driven by
+`sendcmd` so arbitrary curves work even mid-clip (range previews).
+
+## D7 — Transitions belong to the incoming clip
+A transition plays over the first N frames of the incoming clip; the outgoing clip on the same
+track is extended under it (source handles, frozen last frame if none). Dip/flash transitions
+are a synthetic colour layer with a triangle opacity curve.
+
+## D8 — Blender as a background renderer with a JSON protocol
+`blender -b --factory-startup -P blender/mantagli_scene.py -- job.json`. The script rebuilds the
+scene from a validated spec, renders only missing frames (resumable, `.part.png` then rename),
+saves a `.blend` for final renders. Frame cache key = hash of everything affecting pixels.
+EEVEE by default; Cycles with OptiX/CUDA when selected. Chrome reads well thanks to a
+"studio reflection band" world (camera rays see the dark background). World fog absorbs that
+band, so chrome templates default to fog 0. Bloom via compositor Glare node (Blender 5 API
+with menu sockets; attached only when fully linked).
+
+## D9 — Two preview modes, labelled honestly
+Live (approximate) canvas compositor for playback and scrubbing; exact FFmpeg/Blender frame
+when paused (content-hash cached); draft MP4 range renders. The viewer badge always says which.
+
+## D10 — AI Director: manual streaming tool loop
+Claude Opus 5.5, adaptive thinking (summarized), effort high, server-side refusal fallbacks
+(`fallbacks: "default"`), eager input streaming + zod validation. Append-only transcript
+(preserved thinking). Images of real rendered frames are returned in tool results so visual
+review is genuine. Limits: 60 steps, 6 consecutive failing turns. Review mode asks before exports
+and large deletions. Each run keeps a baseline → one-step undoable "Revert all".
+
+## D11 — Toolchain on D:, Rust GNU target
+C: has ~1 GB free; MSVC Build Tools failed (out of space). Rust GNU toolchain
+(self-contained mingw linker) is used for the Tauri shell. If GNU builds of Tauri prove
+problematic, free space on C: and install MSVC Build Tools (`winget install
+Microsoft.VisualStudio.2022.BuildTools` with the VCTools workload).
+
+## D12 — Media folder boundary for AI imports
+AI/MCP may import only from the user's Videos/Music/Pictures/Downloads/Desktop/Documents and
+the project folder; exports only into those or the project. The UI (user-initiated) is not
+restricted.

@@ -9,6 +9,7 @@ import { importFlow, importPaths, MediaBrowser } from "./components/MediaBrowser
 import { Timeline } from "./components/Timeline";
 import { Button } from "./components/ui";
 import { Viewer } from "./components/Viewer";
+import { useBinDrag } from "./lib/binDrag";
 import { onFileDrop } from "./lib/platform";
 import { useStudio } from "./store/studio";
 
@@ -57,6 +58,17 @@ export function App() {
       {dialog === "export" && session.project && <ExportDialog />}
       {dialog === "settings" && <SettingsDialog />}
       <Toasts />
+      <DragGhost />
+    </div>
+  );
+}
+
+function DragGhost() {
+  const { payload, x, y } = useBinDrag();
+  if (!payload) return null;
+  return (
+    <div className="pointer-events-none fixed z-[70] rounded border border-accent bg-raised/90 px-2 py-1 text-[11px] shadow-xl" style={{ left: x + 12, top: y + 8 }}>
+      {payload.label}
     </div>
   );
 }

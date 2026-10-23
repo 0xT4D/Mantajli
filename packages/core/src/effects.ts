@@ -308,3 +308,6 @@ export const LOOKS: LookSpec[] = [
 export function lookSpec(id: string): LookSpec | undefined {
   return LOOKS.find((l) => l.id === id);
 }
+
+/** Line height (× font size) for 2D text, shared by export and live preview. */
+export const TEXT_LINE_HEIGHT = 1.2;

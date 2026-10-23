@@ -4,7 +4,7 @@ import { formatDuration, LOOKS, SCENE_TEMPLATES, type Asset, type AssetKind } fr
 import { engine } from "../engine/client";
 import { isTauri, MEDIA_FILTERS, pickFiles } from "../lib/platform";
 import { projectFile, useStudio } from "../store/studio";
-import { DRAG_ASSET, DRAG_SCENE } from "./Timeline";
+import { binDragHandlers } from "../lib/binDrag";
 import { Button, ColorField, cx, Empty, IconButton, NumberField, Progress, Row, Select, TextField } from "./ui";
 
 const KIND_ICON: Record<AssetKind, React.ReactNode> = {
@@ -139,13 +139,7 @@ function MediaTab() {
 }
 
 function dragProps(a: Asset) {
-  return {
-    draggable: true,
-    onDragStart: (e: React.DragEvent) => {
-      e.dataTransfer.setData(DRAG_ASSET, a.id);
-      e.dataTransfer.effectAllowed = "copy";
-    },
-  };
+  return binDragHandlers({ kind: "asset", id: a.id, label: a.name });
 }
 
 function meta(a: Asset): string {
@@ -284,8 +278,7 @@ function ScenesTab() {
           project.scenes.map((s) => (
             <div
               key={s.id}
-              draggable
-              onDragStart={(e) => e.dataTransfer.setData(DRAG_SCENE, s.id)}
+              {...binDragHandlers({ kind: "scene", id: s.id, label: s.name })}
               onClick={() => setSelection({ kind: "scene", id: s.id })}
               className={cx("mb-1 flex cursor-pointer items-center gap-2 rounded border px-2 py-1.5", selection.kind === "scene" && selection.id === s.id ? "border-accent bg-accent/10" : "border-line bg-panel-2 hover:border-line-2")}
             >
