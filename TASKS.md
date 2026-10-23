@@ -67,6 +67,13 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Shape masks (rectangle/ellipse, feather, invert; frame coordinates; split screens)
 - [x] Word-by-word text reveal + kinetic caption style
 
+## M11 Verification and promo (session 3)
+- [x] Feature sweep script (59 tools + RPC, every effect/transition/animation/blend rendered) — 53/53
+- [x] UI sweep script (workspaces, dialogs, inspectors, playback) — 24/24
+- [x] Fixes from the sweeps: Director missing-key message; dialogs close on Escape while a field is focused; timeline_add_clip kept transform/name/fontAssetId; product turntable material on imported models; Auto edit default track
+- [x] 20 s cinematic promo built in the app (scripts/promo), exported and verified
+- [~] Installer rebuilt with all features (build verified; clean-machine install still untested)
+
 ## M7 AI Director
 - [x] Shared tool layer (52 tools), MCP server (standalone + bridge to app)
 - [x] Director loop (streaming, approvals, cancel, revert/accept, previews as images)

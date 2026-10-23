@@ -10,10 +10,17 @@ committed per feature on `main`.
 
 ## Start here
 1. `git log --oneline | head` and `git status`.
-2. `npm test` runs unit + e2e projects (≈160 s, 74 tests) — all should pass. `npm run typecheck`.
+2. `npm test` runs unit + e2e projects (≈160 s, 75 tests); `npx tsx scripts/feature-sweep.ts` (≈4 min) — all should pass. `npm run typecheck`.
 3. Packaging (verified in session 1): `npm run build:engine`, then
    `source scripts/tauri-env.sh && cd apps/desktop && npx tauri build` (~15 min, LTO).
    Rebuild the installer to ship session-2 features; not yet tested on a clean machine.
+
+## Session 3 added
+Feature sweep (`scripts/feature-sweep.ts`, 53/53) and UI sweep (`scripts/ui-sweep.mjs`, 24/24);
+fixes they found (see TASKS M11); the 20 s promo built inside Mantagli (`scripts/promo/`, project
+and renders in `D:\MantagliPromo`, final video in `C:\Users\USER\Videos\Mantagli Promo\`).
+Rebuild the promo: `look.ts` → `build.ts timeline` → `ui-shots.mjs` (app running on the promo
+project) → `build.ts ui` → `build.ts export`.
 
 ## Session 2 added (all committed, see DECISIONS D13–D18)
 OTIO interchange · typewriter text · wipe/iris transitions · camera shake + beat pulse (motion
@@ -30,8 +37,7 @@ chroma key · shape masks.
 2. Ideas not started: keyframed/animated masks, auto-reframe (horizontal → vertical with a tracked
    crop), speech-to-text captions (needs a local Whisper model), adjustment layers, text presets
    / animated title templates, LUT browser.
-3. Installer rebuilt at 21:59 but predates masks/word reveal: rerun `npm run build:engine` +
-   `npx tauri build`, then install on a clean machine; validate an exported .otio with Python `opentimelineio`.
+3. Installer rebuilt in session 3 with every feature: install it on a clean machine; validate an exported .otio with Python `opentimelineio`.
 4. Optional: persist job history; investigate why FFmpeg composition got slower (~3 fps at
    1080×1920 with looks) during session 2 — the same commit was faster earlier.
 

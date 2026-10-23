@@ -1,6 +1,6 @@
 # Progress
 
-_Last updated: 2026-10-23 (session 2)_
+_Last updated: 2026-10-23 (session 3)_
 
 ## What works (verified this session)
 | Area | Verification |
@@ -35,9 +35,12 @@ _Last updated: 2026-10-23 (session 2)_
 | Reverse clips (incl. audio) and freeze frames (ripple) | `speedramp.test` + `speedramp.e2e` (PSNR per frame, audio RMS) |
 | Chroma key with despill; live per-pixel key | `textfx.e2e` pixel checks; live vs exact screenshot |
 | Shape masks (frame coords, feather, invert); word-by-word text + kinetic captions | `animation.test` + `textfx.e2e` (feather ramp vs core formula); screenshots |
+| Feature sweep: all 59 AI/MCP tools + engine RPC over the real WebSocket, every effect / transition / text animation / blend mode rendered and checked | `npx tsx scripts/feature-sweep.ts` → 53/53, report in `tests/.tmp/feature-sweep/REPORT.md` |
+| UI sweep: every workspace, dialog, inspector, playback, shortcuts, no console errors | `node scripts/ui-sweep.mjs` (engine + Vite running) → 24/24 |
+| 20 s promo made with Mantagli (original score, Blender 3D, UI shots, beat cuts, speed ramp, masks, captions, −14 LUFS) | `scripts/promo/*`; exported + verified 1920×1080, 20.0 s, H.264/AAC; `C:\Users\USER\Videos\Mantagli Promo\` |
 | Release installer rebuilt with session-2 features up to chroma key | `npx tauri build` → `Mantagli_0.1.0_x64-setup.exe` 23.5 MiB (21:59) |
 
-Test totals: `npm test` (runs unit + e2e projects) → 74 tests in 18 files, all passing (≈160 s, RTX 4060).
+Test totals: `npm test` (runs unit + e2e projects) → 75 tests in 18 files, all passing (≈160 s, RTX 4060).
 `npm run typecheck` clean.
 
 ## Known gaps / limitations

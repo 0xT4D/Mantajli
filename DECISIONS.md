@@ -127,3 +127,10 @@ and shows it backwards, so trimming the end of a reversed clip moves its in-poin
 derives the matte from ungraded pixels in a separate graph branch; the preview keys per pixel with
 the same U/V-distance formula (`chromaKeyAlpha`). Captions are plain text clips on a "Captions"
 text track (styles sized from the frame); SRT export reads any text track back.
+
+## D19 — Sweeps over the real protocol; promo built with the product
+The feature sweep talks to an in-process engine server over the same WebSocket protocol as the UI
+and MCP bridge (`tools.call` + RPC), and judges rendered features by pixel difference against a
+reference frame rather than by inspecting graph strings. The promo is built by a script that uses
+only the app's tools, so it doubles as an end-to-end test of a real production; anything that
+needed a workaround there was fixed in the app instead.
