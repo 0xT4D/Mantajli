@@ -1,7 +1,8 @@
 # Next session handoff
 
 ## State
-All milestones M1–M7 have working, tested implementations; M8 (packaging) is in progress.
+All milestones M1–M8 have working, tested implementations. Release installer built:
+`D:\DevTools\mantagli-target\release\bundle\nsis\Mantagli_0.1.0_x64-setup.exe` (23.5 MB).
 Read PROGRESS.md for what is verified and TASKS.md for the open checklist.
 Last commit on `main` of the nested repo `C:\Users\USER\Desktop\Mantagli` (its own git repo,
 separate from the home-folder repo).
@@ -9,10 +10,9 @@ separate from the home-folder repo).
 ## Start here
 1. `git log --oneline | head` and `git status`.
 2. `npm test` (≈10 s) and `npm run test:e2e` (≈70 s) — all should pass.
-3. Packaging: `source scripts/tauri-env.sh && cd apps/desktop && npx tauri build`
-   (installer → `D:\DevTools\mantagli-target\release\bundle\nsis\`). Check the result recorded
-   below, then install and launch the release app to confirm the bundled engine starts
-   (resources: `engine/engine.mjs`, `engine/node.exe`, `engine/blender/mantagli_scene.py`).
+3. Packaging (verified): `npm run build:engine`, then
+   `source scripts/tauri-env.sh && cd apps/desktop && npx tauri build` (~15 min, LTO).
+   Not yet tested: installing the NSIS installer on a clean machine.
 
 ## Highest-value next steps
 1. Live Director run with a real API key (user must provide one): run a brief on the demo

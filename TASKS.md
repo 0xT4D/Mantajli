@@ -56,6 +56,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 
 ## M8 Polish / delivery
 - [x] Tauri debug build runs; engine supervised and shut down cleanly
-- [~] Release build + NSIS installer (see PROGRESS.md for current state)
+- [x] Release build + NSIS installer (D:\DevTools\mantagli-targeteleaseundle
+sis\Mantagli_0.1.0_x64-setup.exe)
 - [ ] Code signing, auto-update
 - [x] README / usage docs
