@@ -61,7 +61,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 
 ## M10 Creator features (session 2, continued)
 - [x] Captions: SRT/WebVTT import as styled caption clips (bold/boxed/clean/karaoke, safe-zone aware), SRT export (captions.test, ai.test)
-- [ ] One-click auto-edit to beats in the UI
+- [x] One-click auto-edit to beats: core command timeline.autoEdit, Auto edit dialog (bin wand button), AI tool timeline_auto_edit (speedramp.test; run in UI)
 - [ ] Freeze frame and reverse clips
 - [ ] Chroma key (green screen)
 

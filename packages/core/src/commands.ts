@@ -1,6 +1,6 @@
 import { produce, type Draft } from "immer";
 import { z } from "zod";
-import { normalizeEffectParams, EFFECT_TYPES, TRANSITION_TYPES } from "./effects.js";
+import { lookSpec, normalizeEffectParams, EFFECT_TYPES, TRANSITION_TYPES } from "./effects.js";
 import { fail } from "./errors.js";
 import { cloneClip, makeColorClip, makeMediaClip, makeSceneClip, makeTextClip, makeTrack, makeSceneObject } from "./factories.js";
 import { newId } from "./ids.js";
@@ -745,6 +745,57 @@ export const COMMANDS = {
     },
   }),
 
+  // ------------------------------------------------------------ auto edit
+
+  "timeline.autoEdit": def({
+    description:
+      "Cut a beat-synced montage: fill [start, end) of a track with shots from the given assets, cutting every N beat markers (beats or downbeats). Assets rotate; reused videos continue from where they left off. Optional transition, look and beat pulse on every shot.",
+    params: z.object({
+      trackId: IdSchema,
+      assetIds: z.array(IdSchema).min(1).max(200),
+      start: z.number().int().nonnegative(),
+      end: z.number().int().positive(),
+      every: z.number().int().min(1).max(32).default(2),
+      on: z.enum(["beats", "downbeats"]).default("beats"),
+      transition: z.object({ type: z.enum(TRANSITION_TYPES as [string, ...string[]]), duration: z.number().int().min(1).max(60) }).nullable().default(null),
+      look: z.string().optional(),
+      pulse: z.number().min(0).max(0.5).default(0),
+    }),
+    apply(p, o) {
+      if (o.end <= o.start) fail("invalid_params", "end must be after start");
+      const kinds = o.on === "downbeats" ? ["downbeat"] : ["beat", "downbeat"];
+      const beats = [...new Set(p.markers.filter((m) => kinds.includes(m.kind) && m.frame > o.start && m.frame < o.end).map((m) => m.frame))].sort((a, b) => a - b);
+      if (!beats.length) fail("invalid_params", `No ${o.on} markers between frames ${o.start} and ${o.end}. Analyse the music first (beat markers).`);
+      const cuts = [o.start, ...beats.filter((_, i) => (i + 1) % o.every === 0), o.end];
+      const look = o.look ? (lookSpec(o.look) ?? fail("unsupported", `Unknown look ${o.look}`)) : undefined;
+      const assets = o.assetIds.map((id) => {
+        const a = findAsset(p as Project, id) ?? fail("missing_asset", `Asset ${id} not found`);
+        if (a.kind !== "video" && a.kind !== "image") fail("invalid_params", `"${a.name}" is not a video or image`);
+        return a;
+      });
+      const fps = fpsOf(p);
+      const usedUntil = new Map<string, number>();
+      const clipIds: string[] = [];
+      for (let i = 0; i < cuts.length - 1; i++) {
+        const a = assets[i % assets.length]!;
+        const frames = cuts[i + 1]! - cuts[i]!;
+        let sourceIn = 0;
+        if (a.kind === "video") {
+          const len = a.meta.duration ?? Infinity;
+          sourceIn = usedUntil.get(a.id) ?? 0;
+          if (sourceIn + frames / fps > len) sourceIn = 0; // wrap around to the start of the clip
+          usedUntil.set(a.id, sourceIn + frames / fps);
+        }
+        const r = sub(p, "clip.add", { trackId: o.trackId, clip: { type: "media", assetId: a.id, start: cuts[i]!, duration: frames, sourceIn: roundSeconds(sourceIn) } });
+        clipIds.push(r.clipId);
+        if (o.transition && i > 0) sub(p, "clip.setTransition", { clipId: r.clipId, transition: { type: o.transition.type, duration: Math.min(o.transition.duration, r.duration) } });
+        for (const e of look?.effects ?? []) sub(p, "effect.add", { clipId: r.clipId, type: e.type, params: e.params });
+        if (o.pulse > 0) sub(p, "effect.add", { clipId: r.clipId, type: "beatPulse", params: { zoom: o.pulse, on: o.on } });
+      }
+      return { clipIds, shots: clipIds.length };
+    },
+  }),
+
   // ------------------------------------------------------------ markers
 
   "marker.add": def({
@@ -968,6 +1019,12 @@ export interface CommandOutcome<R = unknown> {
  * Validate params and apply a command immutably. Throws MantagliError (or a
  * ZodError) without touching the input project on failure.
  */
+/** Run another command inside a command's draft (composite commands); params are validated. */
+function sub<N extends CommandName>(p: D, name: N, params: CommandParams<N>): CommandResult<N> {
+  const cmd = COMMANDS[name] as unknown as CommandDef<z.ZodType, unknown>;
+  return cmd.apply(p, cmd.params.parse(params)) as CommandResult<N>;
+}
+
 export function applyCommand<N extends CommandName>(project: Project, name: N, params: CommandParams<N>): CommandOutcome<CommandResult<N>> {
   const cmd = COMMANDS[name] as unknown as CommandDef<z.ZodType, unknown>;
   if (!cmd) fail("unsupported", `Unknown command "${name}"`);

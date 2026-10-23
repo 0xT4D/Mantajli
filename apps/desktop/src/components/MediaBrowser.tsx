@@ -1,4 +1,4 @@
-import { AlertTriangle, AudioLines, Box, Download, FileType, Film, Grid2x2, Image as ImageIcon, LayoutList, Link2, Palette, Plus, Search, Shapes, Star, Trash2, Waves } from "lucide-react";
+import { AlertTriangle, AudioLines, Box, Download, FileType, Film, Grid2x2, Image as ImageIcon, LayoutList, Link2, Palette, Plus, Search, Shapes, Star, Trash2, Wand2, Waves } from "lucide-react";
 import { useMemo, useState } from "react";
 import { formatDuration, LOOKS, SCENE_TEMPLATES, type Asset, type AssetKind } from "@mantagli/core";
 import { engine } from "../engine/client";
@@ -99,6 +99,7 @@ function MediaTab() {
           <Search size={12} className="text-mute" />
           <input className="min-w-0 flex-1 bg-transparent text-[11px] outline-none" placeholder="Search name or tag" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
         </div>
+        <IconButton icon={<Wand2 size={14} />} label="Auto edit to beats: cut selected footage to the music" onClick={() => useStudio.getState().setDialog("autoEdit")} />
         <IconButton icon={view === "grid" ? <LayoutList size={14} /> : <Grid2x2 size={14} />} label={view === "grid" ? "List view" : "Grid view"} onClick={() => setView(view === "grid" ? "list" : "grid")} />
       </div>
       <div className="flex shrink-0 flex-wrap gap-1 px-2 pb-2">

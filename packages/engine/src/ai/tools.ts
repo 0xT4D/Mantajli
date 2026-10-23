@@ -491,6 +491,26 @@ export const TOOLS: ToolDef[] = [
     },
   }),
   tool({
+    name: "timeline_auto_edit",
+    description:
+      "One-call beat-synced montage: fill [start, end) frames of a video track with shots from assetIds (rotated in order, videos continue where they left off), cutting every N beat markers (on: beats|downbeats). Optional transition {type,duration}, look id and beat pulse zoom (0-0.5). Replaces what is on the track in that range. Run audio_analyze with applyMarkers first.",
+    input: z.object({
+      trackId: Id,
+      assetIds: z.array(Id).min(1).max(200),
+      start: Frame,
+      end: Frame,
+      every: z.number().int().min(1).max(32).default(2),
+      on: z.enum(["beats", "downbeats"]).default("beats"),
+      transition: z.object({ type: z.string(), duration: z.number().int().min(1).max(60) }).nullable().default(null),
+      look: z.string().optional(),
+      pulse: z.number().min(0).max(0.5).default(0),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      return { data: session(ctx).dispatch("timeline.autoEdit", i, ctx.source, label("auto edit to beats")) };
+    },
+  }),
+  tool({
     name: "timeline_set_speed_ramp",
     description: `Speed ramp / velocity edit on a video clip: a preset (${SPEED_RAMP_PRESETS.join(", ")}), explicit speed keyframes (clip-relative frames, 0.1-16x), or null to clear. The clip is shortened if the ramp would run past its source; its own audio is muted while ramped. Great on beat drops: fast into the drop, slow-mo on the hit.`,
     input: z.object({

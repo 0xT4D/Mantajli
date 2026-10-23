@@ -1,4 +1,5 @@
 import { Loader2, PlugZap } from "lucide-react";
+import { AutoEditDialog } from "./components/AutoEdit";
 import { useEffect } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { clipEnd, projectDuration } from "@mantagli/core";
@@ -57,6 +58,7 @@ export function App() {
       {dialog === "openProject" && <OpenProjectDialog />}
       {dialog === "export" && session.project && <ExportDialog />}
       {dialog === "settings" && <SettingsDialog />}
+      {dialog === "autoEdit" && session.project && <AutoEditDialog />}
       <Toasts />
       <DragGhost />
     </div>

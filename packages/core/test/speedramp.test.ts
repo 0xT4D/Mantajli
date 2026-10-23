@@ -92,3 +92,37 @@ describe("speed ramps", () => {
     expect(clipOf(p, clipId).keyframes.speed).toBeUndefined();
   });
 });
+
+describe("auto edit to beats", () => {
+  it("cuts every N beats, rotates assets, advances in-points and wraps", async () => {
+    let { p } = setup(2.5); // 2.5 s video, plus a clip from setup on V1 (replaced below)
+    const img = AssetSchema.parse({ id: "ast_img", kind: "image", name: "i.png", path: "C:/media/i.png", size: 1, hash: "i", importedAt: new Date().toISOString(), meta: { width: 800, height: 800, hasVideo: true, hasAudio: false } });
+    p = applyCommand(p, "asset.add", { asset: img }).project;
+    for (let f = 0; f <= 300; f += 15) p = applyCommand(p, "marker.add", { frame: f, kind: f % 60 === 0 ? "downbeat" : "beat" }).project;
+    const v2 = p.tracks.find((t) => t.name === "V2")!.id;
+    const r = applyCommand(p, "timeline.autoEdit", {
+      trackId: v2,
+      assetIds: ["ast_v", "ast_v", "ast_img"],
+      start: 10,
+      end: 160,
+      every: 2,
+      transition: { type: "crossfade", duration: 6 },
+      look: "cyberpunk",
+      pulse: 0.1,
+    });
+    const clips = r.project.tracks.find((t) => t.id === v2)!.clips;
+    // Beats after 10: 15,30,45,...; every 2nd → cuts at 30, 60, 90, 120, 150.
+    expect(clips.map((c) => [c.start, c.duration])).toEqual([[10, 20], [30, 30], [60, 30], [90, 30], [120, 30], [150, 10]]);
+    const media = clips.map((c) => (c.type === "media" ? [c.assetId, Math.round(c.sourceIn * 1000) / 1000] : null));
+    // Same video twice in a row continues; 0.667 + 1 + 1 > 2.5 s wraps back to 0.
+    expect(media).toEqual([["ast_v", 0], ["ast_v", 0.667], ["ast_img", 0], ["ast_v", 0], ["ast_v", 1], ["ast_img", 0]]);
+    expect(clips[0]!.transitionIn).toBeNull();
+    expect(clips[1]!.transitionIn).toEqual({ type: "crossfade", duration: 6 });
+    expect(clips[1]!.effects.map((e) => e.type)).toContain("beatPulse");
+    expect(clips[1]!.effects.length).toBeGreaterThan(2);
+    // Downbeats only: 60, 120 (every 1).
+    const d = applyCommand(p, "timeline.autoEdit", { trackId: v2, assetIds: ["ast_img"], start: 0, end: 150, every: 1, on: "downbeats" });
+    expect(d.project.tracks.find((t) => t.id === v2)!.clips.map((c) => c.start)).toEqual([0, 60, 120]);
+    expect(() => applyCommand(p, "timeline.autoEdit", { trackId: v2, assetIds: ["ast_img"], start: 1000, end: 1100 })).toThrow(/No beats markers/);
+  });
+});
