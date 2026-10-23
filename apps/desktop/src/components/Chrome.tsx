@@ -76,6 +76,11 @@ export function StatusBar() {
       <span className={cx(connection === "connected" ? "text-ok" : "text-err")}>● engine {connection}</span>
       <span title={deps?.ffmpeg?.path}>{deps?.ffmpeg ? `FFmpeg ${deps.ffmpeg.version}` : <span className="text-err">FFmpeg missing</span>}</span>
       <span title={deps?.blender?.path}>{deps?.blender ? `Blender ${deps.blender.version}` : <span className="text-warn">Blender missing</span>}</span>
+      {deps?.blender?.cyclesDevice && (
+        <span className={deps.blender.cyclesDevice === "CPU" ? "text-warn" : undefined} title="Compute device used by the last Cycles render">
+          Cycles {deps.blender.cyclesDevice === "CPU" ? "CPU (no GPU found)" : `GPU · ${deps.blender.cyclesDevice}`}
+        </span>
+      )}
       <div className="flex-1" />
       <button type="button" className="flex items-center gap-2 hover:text-fg" onClick={() => setOpen(!open)}>
         {active.length ? (

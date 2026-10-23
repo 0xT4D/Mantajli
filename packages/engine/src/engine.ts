@@ -379,13 +379,22 @@ export class Engine extends EventEmitter {
           signal: ctx.signal,
           onProgress: (done, total) => ctx.progress(done / total, `Frame ${done}/${total}`),
         },
-      );
+      ).then((r) => this.noteCyclesDevice(r));
     if (opts.ctx) return { dir, ...(await run(opts.ctx)) };
     const { promise } = this.jobs.submit(
       { type: "scene", label: `3D render: ${scene.name} (${opts.quality})`, key: `scene:${dir}:${frames[0]}-${frames[frames.length - 1]}`, lane: "heavy" },
       run,
     );
     return { dir, ...(await promise) };
+  }
+
+  /** Remember which compute device Cycles used (shown in the UI status bar). */
+  private noteCyclesDevice<R extends { cyclesDevice?: string }>(r: R): R {
+    if (r.cyclesDevice && this.deps.blender && this.deps.blender.cyclesDevice !== r.cyclesDevice) {
+      this.deps.blender.cyclesDevice = r.cyclesDevice;
+      this.emit("deps", this.deps);
+    }
+    return r;
   }
 
   // ------------------------------------------------------------ automatic 3D previews
@@ -434,7 +443,7 @@ export class Engine extends EventEmitter {
           renderSceneFrames(
             { project: p, scene, quality: "draft", resolutionScale: scale, defaultFont: this.default3dFont },
             { blender: this.blender, outputDir: dir, frames, signal: ctx.signal, onProgress: (done, total) => ctx.progress(done / total, `Frame ${done}/${total}`) },
-          ),
+          ).then((r) => this.noteCyclesDevice(r)),
       );
       promise.catch(() => {});
       this.sceneAutoJobs.set(sceneId, { jobId: job.id, dir });

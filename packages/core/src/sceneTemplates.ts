@@ -219,3 +219,27 @@ export function buildSceneFromTemplate(templateId: string, params: SceneTemplate
   if (!t) throw new Error(`Unknown scene template "${templateId}". Available: ${SCENE_TEMPLATE_IDS.join(", ")}`);
   return t.build(params);
 }
+
+// ---------------------------------------------------------------- render quality presets
+
+export interface RenderPresetSpec {
+  id: string;
+  label: string;
+  description: string;
+  render: Partial<Scene["render"]>;
+}
+
+/** One-click render quality settings for 3D scenes (final renders; drafts are always fast). */
+export const RENDER_PRESETS: RenderPresetSpec[] = [
+  { id: "eeveeFast", label: "EEVEE fast", description: "Real-time engine, low samples. Seconds per frame.", render: { engine: "eevee", samples: 16, motionBlur: false, bloom: true } },
+  { id: "eeveeHigh", label: "EEVEE high", description: "Real-time engine, high samples, motion blur. The default look.", render: { engine: "eevee", samples: 64, motionBlur: true, bloom: true } },
+  { id: "cyclesPreview", label: "Cycles GPU preview", description: "Path traced on the GPU (OptiX/CUDA when available), 64 samples + denoise.", render: { engine: "cycles", samples: 64, denoise: true, motionBlur: false } },
+  { id: "cyclesFinal", label: "Cycles GPU final", description: "Path traced, 256 samples + denoise + motion blur. Realistic chrome and glass.", render: { engine: "cycles", samples: 256, denoise: true, motionBlur: true } },
+  { id: "cyclesFilm", label: "Cycles film", description: "1024 samples + denoise + motion blur. Slow; for hero shots.", render: { engine: "cycles", samples: 1024, denoise: true, motionBlur: true } },
+];
+export const RENDER_PRESET_IDS = RENDER_PRESETS.map((p) => p.id);
+
+/** Id of the preset whose settings the render currently matches, if any. */
+export function matchingRenderPreset(render: Scene["render"]): string | undefined {
+  return RENDER_PRESETS.find((p) => Object.entries(p.render).every(([k, v]) => render[k as keyof Scene["render"]] === v))?.id;
+}

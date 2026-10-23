@@ -98,7 +98,7 @@ export interface BlenderRunOptions {
  * Render the requested frames of a scene with Blender in background mode.
  * Frames already on disk are skipped, so interrupted renders resume.
  */
-export async function renderSceneFrames(spec: SceneJobSpec, opts: BlenderRunOptions): Promise<{ rendered: number; skipped: number; warnings: string[] }> {
+export async function renderSceneFrames(spec: SceneJobSpec, opts: BlenderRunOptions): Promise<{ rendered: number; skipped: number; warnings: string[]; cyclesDevice?: string }> {
   const have = await existingFrames(opts.outputDir);
   const wanted = [...new Set(opts.frames)].filter((f) => f >= 1 && f <= spec.scene.durationFrames).sort((a, b) => a - b);
   const missing = wanted.filter((f) => !have.has(f));
@@ -140,6 +140,7 @@ export async function renderSceneFrames(spec: SceneJobSpec, opts: BlenderRunOpti
   if (!(await exists(script))) fail("dependency_unavailable", `Blender scene script not found at ${script}`);
 
   let error: { message: string; trace?: string } | undefined;
+  let cyclesDevice: string | undefined;
   const timeout = 90_000 + missing.length * (opts.frameTimeoutMs ?? 180_000);
   const r = await run(opts.blender, ["-b", "--factory-startup", "--python-exit-code", "1", "-P", script, "--", jobFile], {
     signal: opts.signal,
@@ -148,6 +149,12 @@ export async function renderSceneFrames(spec: SceneJobSpec, opts: BlenderRunOpti
       if (line.startsWith("MANTAGLI_FRAME ")) {
         const [, done, total] = line.slice(15).split(" ").map(Number);
         opts.onProgress?.(done!, total!);
+      } else if (line.startsWith("MANTAGLI_INFO ")) {
+        try {
+          cyclesDevice = (JSON.parse(line.slice(14)) as { cyclesDevice?: string }).cyclesDevice ?? cyclesDevice;
+        } catch {
+          // informational only
+        }
       } else if (line.startsWith("MANTAGLI_WARN ")) {
         warnings.push(line.slice(14));
       } else if (line.startsWith("MANTAGLI_ERROR ")) {
@@ -167,5 +174,5 @@ export async function renderSceneFrames(spec: SceneJobSpec, opts: BlenderRunOpti
   const after = await existingFrames(opts.outputDir);
   const stillMissing = wanted.filter((f) => !after.has(f));
   if (stillMissing.length) fail("render_failed", `Blender finished but ${stillMissing.length} frame(s) are missing (first: ${stillMissing[0]})`);
-  return { rendered: missing.length, skipped: wanted.length - missing.length, warnings };
+  return { rendered: missing.length, skipped: wanted.length - missing.length, warnings, cyclesDevice };
 }

@@ -35,7 +35,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Materials (presets), animation with easing, world (reflection band, fog), bloom
 - [x] Draft previews in the inspector and timeline stills; final renders + .blend saved
 - [x] Automatic background draft renders of timeline scenes after edits (debounced, superseding, cancelled by export; setting toggle)
-- [ ] Cycles GPU quality presets surfaced in UI (engine selectable; GPU auto-enabled)
+- [x] Cycles GPU quality presets surfaced in UI (see M9)
 
 ## M5 Composition / export
 - [x] FFmpeg filter-graph compositor (layers, transforms, keyframes, effects, transitions,
@@ -54,7 +54,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Speed ramps: speed keyframes, 5 presets, frame-exact export (speedramp.test + speedramp.e2e); ramped clip audio muted
 - [x] Layer blend modes: screen, add, multiply, overlay, soft light, lighten, darken, difference (pixel-checked)
 - [x] Letterbox bars and digital glitch (jitter + RGB split, exact in export, channel-split live)
-- [ ] Cycles GPU quality presets in the UI
+- [x] 3D render quality presets (EEVEE fast/high, Cycles GPU preview/final/film) in UI + AI; Cycles device shown in status bar (cycles.e2e)
 - [x] Audio: clip-timed ducking of music under dialogue/SFX roles; loudness-normalised export (loudnorm, verified with ebur128)
 - [ ] Persist undo history and job history across sessions
 

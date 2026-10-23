@@ -12,6 +12,8 @@ import {
   TEXT_ANIMATIONS,
   TRANSITIONS,
   BLEND_MODES,
+  matchingRenderPreset,
+  RENDER_PRESETS,
   type Clip,
   type CommandName,
   type KeyframeProperty,
@@ -723,6 +725,13 @@ function SceneInspector({ project, scene, objectId }: { project: Project; scene:
       </Section>
       {obj && <SceneObjectInspector scene={scene} obj={obj} />}
       <Section title="Render" defaultOpen={!obj}>
+        <Row label="Quality" title={RENDER_PRESETS.find((r) => r.id === matchingRenderPreset(scene.render))?.description ?? "Custom settings"}>
+          <Select
+            value={matchingRenderPreset(scene.render) ?? "custom"}
+            onChange={(v) => v !== "custom" && upd({ render: RENDER_PRESETS.find((r) => r.id === v)!.render }, "Render quality")}
+            options={[...(matchingRenderPreset(scene.render) ? [] : [{ value: "custom", label: "Custom" }]), ...RENDER_PRESETS.map((r) => ({ value: r.id, label: r.label }))]}
+          />
+        </Row>
         <Row label="Engine">
           <Select value={scene.render.engine} onChange={(v) => upd({ render: { engine: v } }, "Render engine")} options={[{ value: "eevee", label: "EEVEE (fast)" }, { value: "cycles", label: "Cycles (path traced)" }, { value: "workbench", label: "Workbench" }]} />
         </Row>

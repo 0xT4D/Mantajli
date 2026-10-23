@@ -113,6 +113,7 @@ def enable_gpu(scene):
     except Exception as e:  # noqa: BLE001
         warn(f"GPU setup failed, using CPU: {e}")
     scene.cycles.device = "CPU"
+    out("MANTAGLI_INFO", {"cyclesDevice": "CPU"})
 
 
 def setup_world(scene, spec):

@@ -5,7 +5,7 @@ import { engine, EngineError } from "../engine/client";
 export interface DepsInfo {
   ffmpeg?: { path: string; version: string };
   ffprobe?: { path: string };
-  blender?: { path: string; version: string; engines: string[]; importers: string[] };
+  blender?: { path: string; version: string; engines: string[]; importers: string[]; cyclesDevice?: string };
   problems: string[];
 }
 

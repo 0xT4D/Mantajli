@@ -10,6 +10,9 @@ import {
   FORMAT_PRESETS,
   KEYFRAME_PROPERTIES,
   SPEED_RAMP_PRESETS,
+  RENDER_PRESETS,
+  RENDER_PRESET_IDS,
+  BLEND_MODES,
   LOOKS,
   MATERIAL_PRESETS,
   MESH_PRIMITIVES,
@@ -206,6 +209,8 @@ export const TOOLS: ToolDef[] = [
           looks: LOOKS.map((l) => ({ id: l.id, description: l.description })),
           textAnimations: TEXT_ANIMATIONS,
           speedRampPresets: SPEED_RAMP_PRESETS,
+          renderPresets: RENDER_PRESETS.map((r) => ({ id: r.id, description: r.description })),
+          blendModes: BLEND_MODES,
           sceneTemplates: SCENE_TEMPLATES.map((t) => ({ id: t.id, description: t.description })),
           materialPresets: MATERIAL_PRESETS,
           meshPrimitives: MESH_PRIMITIVES,
@@ -709,18 +714,21 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "scene_set_render_settings",
-    description: "Scene render/world settings: engine (eevee|cycles|workbench), samples, motionBlur, shutter, bloom, transparent, viewTransform, look; world colour, strength, fog, reflections; durationFrames; activeCameraId.",
+    description: `Scene render/world settings. preset (${RENDER_PRESET_IDS.join(", ")}) sets engine/samples/denoise/motion blur in one go (Cycles uses the GPU automatically); render fields override it: engine (eevee|cycles|workbench), samples, denoise, motionBlur, shutter, bloom, transparent, viewTransform, look; world colour, strength, fog, reflections; durationFrames; activeCameraId.`,
     input: z.object({
       sceneId: Id,
+      preset: z.enum(RENDER_PRESET_IDS as [string, ...string[]]).optional(),
       durationFrames: z.number().int().min(1).max(100000).optional(),
       activeCameraId: Id.optional(),
-      render: z.object({ engine: z.enum(["eevee", "cycles", "workbench"]), samples: z.number().int().min(1).max(4096), motionBlur: z.boolean(), shutter: z.number(), bloom: z.boolean(), transparent: z.boolean(), viewTransform: z.enum(["AgX", "Filmic", "Standard"]), look: z.enum(["None", "Punchy", "High Contrast", "Base Contrast", "Medium Contrast"]) }).partial().optional(),
+      render: z.object({ engine: z.enum(["eevee", "cycles", "workbench"]), samples: z.number().int().min(1).max(4096), denoise: z.boolean(), motionBlur: z.boolean(), shutter: z.number(), bloom: z.boolean(), transparent: z.boolean(), viewTransform: z.enum(["AgX", "Filmic", "Standard"]), look: z.enum(["None", "Punchy", "High Contrast", "Base Contrast", "Medium Contrast"]) }).partial().optional(),
       world: z.object({ color: Hex, strength: z.number(), fog: z.number().min(0).max(1), reflections: z.number().min(0).max(20) }).partial().optional(),
     }),
     mutates: true,
     async run(ctx, i) {
-      session(ctx).dispatch("scene.update", i, ctx.source, label("3D render settings"));
-      return { data: { ok: true } };
+      const { preset, ...rest } = i;
+      const render = preset ? { ...RENDER_PRESETS.find((r) => r.id === preset)!.render, ...rest.render } : rest.render;
+      session(ctx).dispatch("scene.update", { ...rest, render }, ctx.source, label("3D render settings"));
+      return { data: { ok: true, render: session(ctx).project.scenes.find((x) => x.id === i.sceneId)?.render, cyclesDevice: ctx.engine.deps.blender?.cyclesDevice } };
     },
   }),
   tool({

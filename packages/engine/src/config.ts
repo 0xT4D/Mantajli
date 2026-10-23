@@ -102,7 +102,8 @@ async function blenderCandidates(): Promise<string[]> {
 export interface DependencyStatus {
   ffmpeg?: { path: string; version: string };
   ffprobe?: { path: string };
-  blender?: { path: string; version: string; engines: string[]; importers: string[] };
+  /** cyclesDevice: compute backend the last Cycles render used (OPTIX, CUDA, HIP, METAL, ONEAPI or CPU). */
+  blender?: { path: string; version: string; engines: string[]; importers: string[]; cyclesDevice?: string };
   problems: string[];
 }
 
