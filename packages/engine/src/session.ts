@@ -69,7 +69,7 @@ export class ProjectSession extends EventEmitter {
   // ------------------------------------------------------------ lifecycle
 
   static async create(parentDir: string, opts: CreateProjectOptions): Promise<ProjectSession> {
-    const dir = path.join(parentDir, safeName(opts.name) + PROJECT_EXT);
+    const dir = path.resolve(parentDir, safeName(opts.name) + PROJECT_EXT);
     if (await exists(path.join(dir, PROJECT_FILE))) fail("conflict", `A project already exists at ${dir}`);
     await ensureDir(dir);
     const s = new ProjectSession(dir, createProject(opts));
@@ -80,7 +80,8 @@ export class ProjectSession extends EventEmitter {
 
   /** Open a project folder (or its project.json). Recovers from backups if the main file is corrupt. */
   static async open(target: string, opts: { force?: boolean } = {}): Promise<ProjectSession> {
-    const dir = path.basename(target).toLowerCase() === PROJECT_FILE ? path.dirname(target) : target;
+    const abs = path.resolve(target);
+    const dir = path.basename(abs).toLowerCase() === PROJECT_FILE ? path.dirname(abs) : abs;
     const file = path.join(dir, PROJECT_FILE);
     if (!(await exists(file)) && !(await exists(path.join(dir, "backups")))) fail("not_found", `No Mantagli project at ${dir}`);
     let project: Project | undefined;

@@ -24,9 +24,12 @@ export async function makeFilmstrip(ffmpeg: string, asset: Asset, out: string, s
   await ensureDir(path.dirname(out));
   const dur = Math.max(0.5, asset.meta.duration ?? 1);
   const n = 12;
+  // Long files: decode key frames only (fast). Short files may have a single
+  // key frame, so decode everything. tpad guarantees the tile always fills.
+  const pre = dur > 60 ? ["-skip_frame", "nokey"] : [];
   await runFfmpeg(
     ffmpeg,
-    ["-skip_frame", "nokey", "-i", asset.path, "-vf", `fps=${(n / dur).toFixed(5)},scale=-2:72,tile=${n}x1`, "-frames:v", "1", "-vsync", "vfr", "-q:v", "5", out],
+    [...pre, "-i", asset.path, "-vf", `fps=${(n / dur).toFixed(5)},scale=-2:72,tpad=stop_mode=clone:stop=${n},tile=${n}x1`, "-frames:v", "1", "-fps_mode", "vfr", "-q:v", "5", out],
     { signal, timeoutMs: 180000 },
   );
   return out;

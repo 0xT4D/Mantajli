@@ -137,6 +137,11 @@ export class EngineServer {
     "render.still": (p) => this.engine.renderStill(Number(p.frame), { scale: p.scale as number | undefined }),
     "render.range": (p) => this.engine.renderPreviewRange(Number(p.start), Number(p.end), { scale: p.scale as number | undefined }),
     "render.scene": (p) => this.engine.renderScene(String(p.sceneId), { quality: (p.quality as "draft" | "final") ?? "draft", scale: Number(p.scale ?? 0.5), frames: p.frames as number[] | undefined }),
+    "render.sceneCache": async (p) => {
+      const { dir, key } = this.engine.sceneCacheDir(String(p.sceneId), (p.quality as "draft" | "final") ?? "draft", Number(p.scale ?? 0.5));
+      const { existingFrames } = await import("./render/blender.js");
+      return { dir, key, frames: (await existingFrames(dir)).size };
+    },
     "render.validate": (p) => this.engine.validateRender({ preset: p.preset as string | undefined }),
     "render.export": (p) => {
       const { job } = this.engine.startExport({ preset: p.preset as string | undefined, outPath: p.outPath as string | undefined, range: p.range as never });

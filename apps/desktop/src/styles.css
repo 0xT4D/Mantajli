@@ -1,0 +1,79 @@
+@import "tailwindcss";
+
+/* Mantagli design tokens: restrained charcoal workstation, one accent. */
+@theme {
+  --color-bg: #0b0b0d;
+  --color-panel: #121215;
+  --color-panel-2: #17171b;
+  --color-raised: #1d1d22;
+  --color-hover: #24242a;
+  --color-line: #26262c;
+  --color-line-2: #32323a;
+  --color-fg: #e6e6ea;
+  --color-dim: #9a9aa4;
+  --color-mute: #6a6a74;
+  --color-accent: #7c6cff;
+  --color-accent-2: #9d90ff;
+  --color-ok: #3fbf7f;
+  --color-warn: #e0a64a;
+  --color-err: #e5545c;
+  --color-clip-video: #3a5f9e;
+  --color-clip-audio: #2f7d5c;
+  --color-clip-text: #8a5aa8;
+  --color-clip-scene: #b0663a;
+  --color-clip-color: #555560;
+  --font-sans: "Inter", "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+  --text-2xs: 10px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #34343c transparent;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Resize handles */
+[data-separator] {
+  background: var(--color-line);
+  transition: background 0.12s;
+}
+[data-separator="hover"],
+[data-separator="active"] {
+  background: var(--color-accent);
+}
+
+.checker {
+  background-color: #1a1a1e;
+  background-image: linear-gradient(45deg, #222227 25%, transparent 25%), linear-gradient(-45deg, #222227 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #222227 75%), linear-gradient(-45deg, transparent 75%, #222227 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+input[type="range"] {
+  accent-color: var(--color-accent);
+}
