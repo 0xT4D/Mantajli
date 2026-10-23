@@ -122,7 +122,7 @@ export const SCENE_TEMPLATES: SceneTemplateSpec[] = [
         location: [0, 0, -1],
         scale: [20, 20, 1],
         mesh: { primitive: "plane", size: 1, smooth: false },
-        material: { preset: "custom", baseColor: "#111114", metallic: 0.2, roughness: 0.3, emissionColor: "#000000", emissionStrength: 0, transmission: 0 },
+        material: { preset: "custom", baseColor: "#060608", metallic: 0, roughness: 0.6, emissionColor: "#000000", emissionStrength: 0, transmission: 0 },
       });
       return finish(p, "productTurntable", [
         hero,
@@ -131,7 +131,7 @@ export const SCENE_TEMPLATES: SceneTemplateSpec[] = [
         areaLight("Key", [-4, -4, 4], [50, 0, -45], "#fff4e8", 1200, 3),
         areaLight("Fill", [5, -3, 2], [70, 0, 60], p.accentB ?? "#bcd6ff", 400, 5),
         areaLight("Rim", [0, 5, 3], [-55, 0, 0], "#ffffff", 900, 4),
-      ], { world: { color: "#0a0a0d", strength: 0.4, fog: 0, reflections: 2.5 } });
+      ], { world: { color: "#0a0a0d", strength: 0.4, fog: 0, reflections: 1.2 } });
     },
   },
   {
