@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { formatTimecode, FORMAT_PRESETS, type FormatPreset } from "@mantagli/core";
 import { pickFiles, pickSavePath, revealInFolder } from "../lib/platform";
 import { useStudio, type JobInfo, type Workspace } from "../store/studio";
-import { Button, cx, Dialog, IconButton, NumberField, Progress, Row, Select, TextField } from "./ui";
+import { Button, cx, Dialog, IconButton, NumberField, Progress, Row, Select, TextField, Toggle } from "./ui";
 
 export function TopBar() {
   const { session, undo, redo, workspace, setWorkspace, playing, setPlaying, playhead, setDialog, call, aiPanelOpen, toggleAiPanel } = useStudio();
@@ -347,6 +347,9 @@ export function SettingsDialog() {
           <div className="text-[11px] font-semibold text-dim">Preview</div>
           <Row label="Preview scale">
             <NumberField value={s.previewScale} min={0.1} max={1} step={0.05} onChange={(v) => void updateSettings({ previewScale: v })} />
+          </Row>
+          <Row label="3D previews" title="Re-render draft frames of 3D scenes on the timeline in the background after edits">
+            <Toggle checked={s.autoRenderScenes} onChange={(v) => void updateSettings({ autoRenderScenes: v })} label="Auto-render after edits" />
           </Row>
         </div>
         <div className="space-y-2">

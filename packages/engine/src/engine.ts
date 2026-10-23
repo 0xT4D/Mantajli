@@ -26,7 +26,7 @@ import { AppConfig, discoverDependencies, type DependencyStatus } from "./config
 import { JobManager, type JobContext, type JobInfo } from "./jobs.js";
 import { analyzeAudio, makeFilmstrip, makeProxy, makeThumbnail, toBeatAnalysis } from "./media/derive.js";
 import { kindFromExtension, probeMedia, SUPPORTED_EXTENSIONS } from "./media/probe.js";
-import { renderSceneFrames, sceneRenderKey, type SceneQuality } from "./render/blender.js";
+import { existingFrames, renderSceneFrames, sceneRenderKey, type SceneQuality } from "./render/blender.js";
 import { compose, verifyOutput, type OutputCheck } from "./render/compose.js";
 import { defaultFontFile, resolveFontFile } from "./render/fonts.js";
 import { ProjectSession } from "./session.js";
@@ -65,6 +65,11 @@ export class Engine extends EventEmitter {
   deps: DependencyStatus = { problems: ["not checked yet"] };
   session?: ProjectSession;
   private fontCache = new Map<string, string | undefined>();
+  private sceneAutoTimer?: NodeJS.Timeout;
+  /** sceneId -> running/queued auto-preview job (cancelled when superseded). */
+  private sceneAutoJobs = new Map<string, { jobId: string; dir: string }>();
+  /** Delay after the last edit before auto-rendering 3D previews. */
+  sceneAutoDelayMs = 2500;
   private defaultFont?: string;
   private default3dFont?: string;
 
@@ -104,7 +109,10 @@ export class Engine extends EventEmitter {
 
   private attach(s: ProjectSession) {
     this.session = s;
-    s.on("change", (c) => this.emit("change", c));
+    s.on("change", (c) => {
+      this.emit("change", c);
+      this.scheduleSceneAutoRender();
+    });
     s.on("saveState", (st) => this.emit("saveState", st));
     this.emit("projectOpened", { dir: s.dir, project: s.project, recoveredFrom: s.recoveredFrom });
     void this.config.addRecent(s.dir);
@@ -128,6 +136,7 @@ export class Engine extends EventEmitter {
 
   async closeProject(): Promise<void> {
     if (!this.session) return;
+    this.cancelSceneAutoRenders();
     const s = this.session;
     this.session = undefined;
     await s.close();
@@ -379,6 +388,61 @@ export class Engine extends EventEmitter {
     return { dir, ...(await promise) };
   }
 
+  // ------------------------------------------------------------ automatic 3D previews
+
+  /** Debounced: after edits settle, keep draft frames of timeline scenes up to date. */
+  scheduleSceneAutoRender(): void {
+    if (this.sceneAutoTimer) clearTimeout(this.sceneAutoTimer);
+    if (!this.config.settings.autoRenderScenes || !this.deps.blender || !this.session) return;
+    this.sceneAutoTimer = setTimeout(() => void this.runSceneAutoRender().catch(() => {}), this.sceneAutoDelayMs);
+  }
+
+  cancelSceneAutoRenders(): void {
+    if (this.sceneAutoTimer) clearTimeout(this.sceneAutoTimer);
+    for (const { jobId } of this.sceneAutoJobs.values()) this.jobs.cancel(jobId);
+    this.sceneAutoJobs.clear();
+  }
+
+  /** Queue draft renders for scenes on the timeline whose cached frames are stale or incomplete. */
+  async runSceneAutoRender(): Promise<JobInfo[]> {
+    const s = this.session;
+    if (!s || !this.deps.blender) return [];
+    const p = s.project;
+    const scale = this.config.settings.previewScale;
+    const used = new Set(p.tracks.flatMap((t) => t.clips).filter((c) => c.type === "scene").map((c) => (c as { sceneId: string }).sceneId));
+    // Drop jobs for scenes no longer on the timeline.
+    for (const [sceneId, j] of this.sceneAutoJobs) if (!used.has(sceneId)) (this.jobs.cancel(j.jobId), this.sceneAutoJobs.delete(sceneId));
+    const queued: JobInfo[] = [];
+    for (const sceneId of used) {
+      const scene = findScene(p, sceneId);
+      if (!scene) continue;
+      const { dir } = this.sceneCacheDir(sceneId, "draft", scale);
+      const prev = this.sceneAutoJobs.get(sceneId);
+      if (prev && prev.dir === dir) {
+        const st = this.jobs.get(prev.jobId)?.status;
+        if (st === "queued" || st === "running") continue; // already rendering this exact version
+      }
+      if (prev) this.jobs.cancel(prev.jobId); // superseded by a newer edit
+      if ((await existingFrames(dir)).size >= scene.durationFrames) {
+        this.sceneAutoJobs.delete(sceneId);
+        continue;
+      }
+      const frames = Array.from({ length: scene.durationFrames }, (_, i) => i + 1);
+      const { job, promise } = this.jobs.submit(
+        { type: "scene", label: `Auto 3D preview: ${scene.name}`, key: `scene:${dir}:auto`, lane: "heavy" },
+        (ctx) =>
+          renderSceneFrames(
+            { project: p, scene, quality: "draft", resolutionScale: scale, defaultFont: this.default3dFont },
+            { blender: this.blender, outputDir: dir, frames, signal: ctx.signal, onProgress: (done, total) => ctx.progress(done / total, `Frame ${done}/${total}`) },
+          ),
+      );
+      promise.catch(() => {});
+      this.sceneAutoJobs.set(sceneId, { jobId: job.id, dir });
+      queued.push(job);
+    }
+    return queued;
+  }
+
   /** Scene frames needed by a plan, grouped per scene. */
   private sceneFramesNeeded(plan: CompositionPlan): Map<string, number[]> {
     const fps = plan.fps;
@@ -543,6 +607,8 @@ export class Engine extends EventEmitter {
     const outPath = opts.outPath ? path.resolve(opts.outPath) : path.join(s.dir, "exports", `${safeName(p.name)}_${new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19)}${ext}`);
     if (path.extname(outPath).toLowerCase() !== ext) fail("invalid_params", `Output must be ${ext} for ${codec}`);
     const plan = buildCompositionPlan(p, opts.range ? { rangeStart: opts.range.start, rangeEnd: opts.range.end } : {});
+    // Background previews must not delay delivery.
+    this.cancelSceneAutoRenders();
     return this.jobs.submit({ type: "export", label: `Export ${path.basename(outPath)}`, key: `export:${outPath}`, lane: "heavy" }, async (ctx) => {
       await this.warmFonts(p);
       const sceneWeight = plan.sceneIds.length ? 0.6 : 0;

@@ -147,7 +147,8 @@ export function Viewer() {
   if (!project) return null;
   const fps = fpsValue(project.settings.fps);
   const total = projectDuration(project);
-  const busyScene = Object.values(jobs).some((j) => j.type === "scene" && (j.status === "running" || j.status === "queued"));
+  const sceneJob = Object.values(jobs).find((j) => j.type === "scene" && (j.status === "running" || j.status === "queued"));
+  const busyScene = !!sceneJob;
 
   const renderScenes = async () => {
     for (const s of project.scenes) await call("render.scene", { sceneId: s.id, quality: "draft", scale }).catch(() => {});
@@ -171,7 +172,11 @@ export function Viewer() {
       <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-line bg-panel px-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-dim">Viewer</span>
         <span className={cx("rounded px-1.5 py-0.5 text-[10px] font-medium", badge.cls)}>{badge.text}</span>
-        {sceneMissing && project.scenes.length > 0 && <span className="rounded bg-clip-scene/20 px-1.5 py-0.5 text-[10px] text-[#e0b090]">3D not pre-rendered for live playback</span>}
+        {sceneMissing && project.scenes.length > 0 && (
+          <span className="rounded bg-clip-scene/20 px-1.5 py-0.5 text-[10px] text-[#e0b090]">
+            {busyScene ? `3D preview rendering${sceneJob?.progress != null ? ` ${Math.round(sceneJob.progress * 100)}%` : "…"}` : "3D not pre-rendered for live playback"}
+          </span>
+        )}
         <div className="flex-1" />
         {project.scenes.length > 0 && (
           <Button variant="ghost" onClick={() => void renderScenes()} disabled={busyScene || !info?.deps.blender} title={info?.deps.blender ? "Render draft frames of all 3D scenes with Blender for live playback" : "Blender not available"}>

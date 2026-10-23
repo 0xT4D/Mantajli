@@ -34,6 +34,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Objects: primitives, 3D text, cameras (DOF, track-to), lights, particles, models
 - [x] Materials (presets), animation with easing, world (reflection band, fog), bloom
 - [x] Draft previews in the inspector and timeline stills; final renders + .blend saved
+- [x] Automatic background draft renders of timeline scenes after edits (debounced, superseding, cancelled by export; setting toggle)
 - [ ] Cycles GPU quality presets surfaced in UI (engine selectable; GPU auto-enabled)
 
 ## M5 Composition / export
@@ -56,7 +57,6 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 
 ## M8 Polish / delivery
 - [x] Tauri debug build runs; engine supervised and shut down cleanly
-- [x] Release build + NSIS installer (D:\DevTools\mantagli-targeteleaseundle
-sis\Mantagli_0.1.0_x64-setup.exe)
+- [x] Release build + NSIS installer (`D:/DevTools/mantagli-target/release/bundle/nsis/Mantagli_0.1.0_x64-setup.exe`)
 - [ ] Code signing, auto-update
 - [x] README / usage docs

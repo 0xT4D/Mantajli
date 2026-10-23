@@ -22,6 +22,8 @@ export const AppSettingsSchema = z.object({
   /** review: AI proposes and the user approves large edits; autonomous: AI applies directly. */
   aiAutonomy: z.enum(["review", "autonomous"]).default("review"),
   previewScale: z.number().min(0.1).max(1).default(0.5),
+  /** Re-render draft frames of timeline 3D scenes in the background after edits. */
+  autoRenderScenes: z.boolean().default(true),
   /** Opaque UI preferences (layout sizes, last workspace...). */
   ui: z.record(z.string(), z.unknown()).default({}),
 });
