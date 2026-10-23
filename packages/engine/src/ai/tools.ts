@@ -9,6 +9,7 @@ import {
   EFFECT_TYPES,
   FORMAT_PRESETS,
   KEYFRAME_PROPERTIES,
+  SPEED_RAMP_PRESETS,
   LOOKS,
   MATERIAL_PRESETS,
   MESH_PRIMITIVES,
@@ -81,6 +82,9 @@ const Hex = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 const Vec3 = z.tuple([z.number(), z.number(), z.number()]);
 
 const session = (ctx: ToolContext) => ctx.engine.requireSession();
+/** Longest a single tool call blocks (MCP clients usually time out at 60 s). */
+const MAX_TOOL_WAIT_S = 45;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const label = (tool: string) => `AI: ${tool}`;
 
 /** Folders the AI may import media from. */
@@ -201,6 +205,7 @@ export const TOOLS: ToolDef[] = [
           transitions: TRANSITIONS.map((t) => ({ type: t.type, description: t.description })),
           looks: LOOKS.map((l) => ({ id: l.id, description: l.description })),
           textAnimations: TEXT_ANIMATIONS,
+          speedRampPresets: SPEED_RAMP_PRESETS,
           sceneTemplates: SCENE_TEMPLATES.map((t) => ({ id: t.id, description: t.description })),
           materialPresets: MATERIAL_PRESETS,
           meshPrimitives: MESH_PRIMITIVES,
@@ -212,6 +217,7 @@ export const TOOLS: ToolDef[] = [
             "A transition belongs to the incoming clip and plays over its first N frames; the previous clip on the same track is held underneath.",
             "Clip transform x/y are pixel offsets from frame centre; scale 1 = fill the frame (fit: fill|fit|stretch).",
             "3D scene frames and durations are in project frames; scene keyframes are scene-relative.",
+            "Motion effects (shake, beatPulse) animate the layer; beatPulse reacts to beat/downbeat markers inside the clip (run audio_analyze first).",
           ],
         },
       };
@@ -469,12 +475,24 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "timeline_set_keyframe",
-    description: "Add/replace a keyframe on a clip property (opacity 0-1, x/y pixels, scale, rotation degrees, volume dB). frame is relative to the clip start.",
+    description: "Add/replace a keyframe on a clip property (opacity 0-1, x/y pixels, scale, rotation degrees, volume dB, speed 0.1-16x for video speed ramps). frame is relative to the clip start.",
     input: z.object({ clipId: Id, property: z.enum(KEYFRAME_PROPERTIES), frame: Frame, value: z.number(), easing: z.enum(EASINGS).default("easeInOut") }),
     mutates: true,
     async run(ctx, i) {
       session(ctx).dispatch("keyframe.set", { clipId: i.clipId, property: i.property, keyframe: { frame: i.frame, value: i.value, easing: i.easing } }, ctx.source, label("keyframe"));
       return { data: { ok: true } };
+    },
+  }),
+  tool({
+    name: "timeline_set_speed_ramp",
+    description: `Speed ramp / velocity edit on a video clip: a preset (${SPEED_RAMP_PRESETS.join(", ")}), explicit speed keyframes (clip-relative frames, 0.1-16x), or null to clear. The clip is shortened if the ramp would run past its source; its own audio is muted while ramped. Great on beat drops: fast into the drop, slow-mo on the hit.`,
+    input: z.object({
+      clipId: Id,
+      ramp: z.union([z.enum(SPEED_RAMP_PRESETS), z.array(z.object({ frame: Frame, value: z.number().min(0.1).max(16), easing: z.enum(EASINGS).default("easeInOut") })).min(1).max(200), z.null()]),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      return { data: session(ctx).dispatch("clip.setSpeedRamp", { clipId: i.clipId, ramp: i.ramp }, ctx.source, label("speed ramp")) };
     },
   }),
   tool({
@@ -759,7 +777,7 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "export_render",
-    description: "Start the final export (Blender final-quality 3D frames + FFmpeg composition + verification). Returns a jobId immediately; poll export_status. Presets: reel1080, square1080, landscape1080, landscape4k, reel4k, master (ProRes).",
+    description: `Start the final export (Blender final-quality 3D frames + FFmpeg composition + verification). Returns a jobId; with wait=true it waits up to ${MAX_TOOL_WAIT_S} s (MCP clients time out around 60 s) and otherwise returns status "running" — then poll export_status with waitSeconds. Presets: reel1080, square1080, landscape1080, landscape4k, reel4k, master (ProRes).`,
     input: z.object({ preset: z.string().optional(), outPath: z.string().optional(), wait: z.boolean().default(false) }),
     mutates: false,
     async run(ctx, i) {
@@ -772,8 +790,10 @@ export const TOOLS: ToolDef[] = [
       }
       const { job, promise } = ctx.engine.startExport({ preset: i.preset, outPath: i.outPath });
       if (i.wait) {
-        const r = await promise;
-        return { data: { jobId: job.id, status: "done", ...r } };
+        const r = await Promise.race([promise, sleep(MAX_TOOL_WAIT_S * 1000).then(() => undefined)]);
+        if (r) return { data: { jobId: job.id, status: "done", ...r } };
+        const j = ctx.engine.jobs.get(job.id)!;
+        return { data: { jobId: job.id, status: j.status, progress: j.progress, message: j.message, hint: "Still rendering: call export_status with waitSeconds until status is done." } };
       }
       return { data: { jobId: job.id, status: job.status } };
     },
@@ -804,12 +824,17 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "export_status",
-    description: "Status/progress/result of a background job (export, preview, scene render).",
-    input: z.object({ jobId: Id }),
+    description: `Status/progress/result of a background job (export, preview, scene render). waitSeconds (≤ ${MAX_TOOL_WAIT_S}) waits for the job to finish before answering.`,
+    input: z.object({ jobId: Id, waitSeconds: z.number().min(0).max(MAX_TOOL_WAIT_S).default(0) }),
     mutates: false,
     async run(ctx, i) {
-      const j = ctx.engine.jobs.get(i.jobId) ?? fail("not_found", `Job ${i.jobId} not found`);
-      return { data: j };
+      const deadline = Date.now() + i.waitSeconds * 1000;
+      for (;;) {
+        const j = ctx.engine.jobs.get(i.jobId) ?? fail("not_found", `Job ${i.jobId} not found`);
+        if (j.status !== "queued" && j.status !== "running") return { data: j };
+        if (Date.now() >= deadline) return { data: j };
+        await sleep(Math.min(500, deadline - Date.now()));
+      }
     },
   }),
   tool({

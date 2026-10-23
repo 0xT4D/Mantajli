@@ -17,6 +17,7 @@ import {
   type Project,
   type Scene,
   type SceneObject,
+  type SpeedRampPreset,
   type Track,
 } from "@mantagli/core";
 import { engine } from "../engine/client";
@@ -119,6 +120,7 @@ function useAnimatedSetter(clip: Clip) {
       if (clip.keyframes[prop]?.length) cmd("keyframe.set", { clipId: clip.id, property: prop, keyframe: { frame: local, value: v, easing: "easeInOut" } }, `Keyframe ${prop}`);
       else if (prop === "opacity") cmd("clip.update", { clipId: clip.id, props: { opacity: v } }, "Opacity");
       else if (prop === "volume") cmd("clip.update", { clipId: clip.id, props: { volumeDb: v } }, "Volume");
+      else if (prop === "speed") cmd("clip.update", { clipId: clip.id, props: { speed: v } }, "Speed");
       else cmd("clip.update", { clipId: clip.id, props: { transform: { [prop]: v } } }, `Transform ${prop}`);
     },
   };
@@ -151,9 +153,27 @@ function ClipInspector({ project, clip, track }: { project: Project; clip: Clip;
           </Row>
         )}
         {clip.type === "media" && !isAudio && asset?.kind !== "image" && (
-          <Row label="Speed" title="Playback speed; duration stays fixed and the source range changes">
-            <Slider value={clip.speed} min={0.1} max={4} step={0.05} unit="×" onChange={(v) => upd({ speed: v }, "Speed")} />
-          </Row>
+          <>
+            <Row label="Speed" title="Playback speed; duration stays fixed and the source range changes. Keyframe it for a speed ramp.">
+              <Slider value={a.value("speed")} min={0.1} max={4} step={0.05} unit="×" onChange={(v) => a.set("speed", v)} />
+              <KeyButton clip={clip} prop="speed" />
+            </Row>
+            <Row label="Speed ramp" title="Velocity-edit presets (replace the speed keyframes). The clip's own audio is muted while ramped.">
+              <Select
+                value={clip.keyframes.speed?.length ? "custom" : "none"}
+                onChange={(v) => v !== "custom" && cmd("clip.setSpeedRamp", { clipId: clip.id, ramp: v === "none" ? null : (v as SpeedRampPreset) }, "Speed ramp")}
+                options={[
+                  { value: "none", label: "None (constant)" },
+                  ...(clip.keyframes.speed?.length ? [{ value: "custom", label: "Custom (keyframed)" }] : []),
+                  { value: "montage", label: "Montage 1×→3×→0.3×→1×" },
+                  { value: "slowMoHit", label: "Slow-mo hit" },
+                  { value: "flashMotion", label: "Flash motion" },
+                  { value: "speedUp", label: "Speed up" },
+                  { value: "slowDown", label: "Slow down" },
+                ]}
+              />
+            </Row>
+          </>
         )}
         {clip.type === "media" && isAudio && (
           <Row label="Speed">

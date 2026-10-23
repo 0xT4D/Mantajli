@@ -5,12 +5,16 @@ import {
   findAsset,
   isConstant,
   layerCurves,
+  hasSpeedRamp,
   MASK_FEATHER,
   MOTION_EFFECTS,
+  sourceOffset,
+  speedAt,
   revealLines,
   textReveal,
   transitionMask,
   type Asset,
+  type Clip,
   type CompositionPlan,
   type Curve,
   type Effect,
@@ -229,6 +233,38 @@ function effectStatements(effects: Effect[], inLabel: string, id: string, px: nu
   return { stmts, out: cur };
 }
 
+// ------------------------------------------------------------------ speed ramps
+
+/**
+ * Time remap for a speed-ramped layer: maps source seconds (relative to the
+ * layer's source start) to output seconds. The core mapping is piecewise
+ * linear per frame; here it is sampled every `step` frames (≤ ~120 pieces) and
+ * written as a flat sum of clamped linear pieces (no deeply nested if()).
+ *
+ * The input is seeked `lead` seconds early and timestamps are taken as is (not
+ * re-based on the first frame), so source frames keep their exact times;
+ * frames before the start map to 0. With `fps=round=up` each output frame then
+ * shows the latest source frame at or before its source time, like a player.
+ */
+export function rampRetime(clip: Clip, clipOffset: number, frames: number, fps: number, lead: number): { filter: string; sourceSeconds: number } {
+  const step = Math.max(1, Math.ceil(frames / 120));
+  const marks: { t: number; s: number }[] = [];
+  for (let j = 0; j < frames; j += step) marks.push({ t: j / fps, s: sourceOffset(clip, clipOffset, clipOffset + j, fps) });
+  marks.push({ t: frames / fps, s: sourceOffset(clip, clipOffset, clipOffset + frames, fps) });
+  const terms: string[] = [];
+  for (let k = 0; k < marks.length - 1; k++) {
+    const a = marks[k]!;
+    const b = marks[k + 1]!;
+    const ds = b.s - a.s;
+    if (ds <= 0) continue;
+    terms.push(`clip(ld(0)-${n6(a.s)},0,${n6(ds)})*${n6((b.t - a.t) / ds)}`);
+  }
+  // Past the end keep the last speed, so trailing frames stay ordered.
+  const last = marks[marks.length - 1]!;
+  terms.push(`max(ld(0)-${n6(last.s)},0)/${n6(speedAt(clip, clipOffset + frames))}`);
+  return { filter: `setpts='st(0,PTS*TB-${n6(lead)});(${terms.join("+")})/TB',fps=${fps}:round=up`, sourceSeconds: last.s };
+}
+
 // ------------------------------------------------------------------ main builder
 
 export function buildGraph(ctx: GraphContext): BuiltGraph {
@@ -265,10 +301,17 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
           stmts.push(`[${inputs.length - 1}:v]fps=${fpsR}[${src}]`);
           hasAlpha = true;
         } else {
-          const srcSeconds = layerSec * layer.speed + 0.5;
-          inputs.push(["-ss", n6(layer.sourceStart), "-t", n6(srcSeconds), "-i", file]);
-          const retime = layer.speed === 1 ? "setpts=PTS-STARTPTS" : `setpts=(PTS-STARTPTS)/${n6(layer.speed)}`;
-          stmts.push(`[${inputs.length - 1}:v]${retime},fps=${fpsR}[${src}]`);
+          if (hasSpeedRamp(clip)) {
+            const lead = Math.min(layer.sourceStart, 0.2);
+            const ramp = rampRetime(clip, layer.clipOffset, layer.frames, fps, lead);
+            inputs.push(["-ss", n6(layer.sourceStart - lead), "-t", n6(lead + ramp.sourceSeconds + 0.5), "-i", file]);
+            stmts.push(`[${inputs.length - 1}:v]${ramp.filter},fps=${fpsR}[${src}]`);
+          } else {
+            const srcSeconds = layerSec * layer.speed + 0.5;
+            inputs.push(["-ss", n6(layer.sourceStart), "-t", n6(srcSeconds), "-i", file]);
+            const retime = layer.speed === 1 ? "setpts=PTS-STARTPTS" : `setpts=(PTS-STARTPTS)/${n6(layer.speed)}`;
+            stmts.push(`[${inputs.length - 1}:v]${retime},fps=${fpsR}[${src}]`);
+          }
         }
         break;
       }

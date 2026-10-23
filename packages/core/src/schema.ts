@@ -82,7 +82,7 @@ export type Asset = z.infer<typeof AssetSchema>;
 export const EASINGS = ["linear", "easeIn", "easeOut", "easeInOut", "hold"] as const;
 export type Easing = (typeof EASINGS)[number];
 
-export const KEYFRAME_PROPERTIES = ["opacity", "x", "y", "scale", "rotation", "volume"] as const;
+export const KEYFRAME_PROPERTIES = ["opacity", "x", "y", "scale", "rotation", "volume", "speed"] as const;
 export type KeyframeProperty = (typeof KEYFRAME_PROPERTIES)[number];
 
 export const KeyframeSchema = z.object({

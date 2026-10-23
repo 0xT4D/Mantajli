@@ -92,12 +92,19 @@ describe("agent montage over MCP", () => {
 
     const check = (await call("project_validate_render", { preset: "reel1080" })).data;
     expect(check.ok, JSON.stringify(check.issues)).toBe(true);
-    const exp = await call("export_render", { preset: "reel1080", wait: true });
-    expect(exp.data.status).toBe("done");
-    expect(exp.data.check.ok).toBe(true);
-    expect(exp.data.check.width).toBe(1080);
-    expect(exp.data.check.height).toBe(1920);
-    expect(exp.data.check.duration).toBeCloseTo(8, 1);
+    // A waited export answers within the MCP timeout; long ones are polled like an agent would.
+    const t0 = Date.now();
+    let exp = (await call("export_render", { preset: "reel1080", wait: true })).data;
+    expect(Date.now() - t0).toBeLessThan(55_000);
+    while (exp.status !== "done") {
+      expect(["queued", "running"]).toContain(exp.status);
+      const j = (await call("export_status", { jobId: exp.jobId, waitSeconds: 40 })).data;
+      exp = j.status === "done" ? { status: "done", ...j.result } : { ...j, jobId: exp.jobId };
+    }
+    expect(exp.check.ok).toBe(true);
+    expect(exp.check.width).toBe(1080);
+    expect(exp.check.height).toBe(1920);
+    expect(exp.check.duration).toBeCloseTo(8, 1);
 
     // Undo works through MCP too.
     const undo = await call("project_undo");

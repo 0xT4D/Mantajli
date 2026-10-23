@@ -308,7 +308,12 @@ export async function importOtio(engine: Engine, file: string, source: "user" | 
               if (mClip.type === "media") Object.assign(props, { volumeDb: mClip.volumeDb, audioEnabled: mClip.audioEnabled });
               tx.dispatch("clip.update", { clipId, props: props as never });
               for (const fx of mClip.effects) tx.dispatch("effect.add", { clipId, type: fx.type, params: fx.params });
-              for (const [prop, kfs] of Object.entries(mClip.keyframes)) for (const k of kfs ?? []) tx.dispatch("keyframe.set", { clipId, property: prop as "opacity", keyframe: k });
+              for (const [prop, kfs] of Object.entries(mClip.keyframes)) {
+                if (!kfs?.length) continue;
+                // A ramp is set in one go: partial ramps would re-clamp the clip length.
+                if (prop === "speed") tx.dispatch("clip.setSpeedRamp", { clipId, ramp: kfs });
+                else for (const k of kfs) tx.dispatch("keyframe.set", { clipId, property: prop as "opacity", keyframe: k });
+              }
             }
             if (pendingTransition) {
               tx.dispatch("clip.setTransition", { clipId, transition: { type: pendingTransition.type, duration: Math.min(pendingTransition.duration, duration) } });

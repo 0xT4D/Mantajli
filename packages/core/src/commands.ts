@@ -30,7 +30,34 @@ import {
 import { buildSceneFromTemplate, SCENE_TEMPLATE_IDS } from "./sceneTemplates.js";
 import { TEXT_ANIMATIONS } from "./effects.js";
 import { roundSeconds } from "./time.js";
-import { clipEnd, clipsInRange, findAsset, findScene, maxClipDuration, sortTrackClips } from "./timeline.js";
+import { clipEnd, clipsInRange, evalKeyframes, findAsset, findScene, MAX_SPEED, maxClipDuration, MIN_SPEED, sortTrackClips, sourceOffset } from "./timeline.js";
+
+export const SPEED_RAMP_PRESETS = ["slowMoHit", "speedUp", "slowDown", "flashMotion", "montage"] as const;
+export type SpeedRampPreset = (typeof SPEED_RAMP_PRESETS)[number];
+
+/** Speed keyframes for a named velocity-edit preset over a clip of `duration` frames. */
+export function speedRampPreset(name: SpeedRampPreset, duration: number): { frame: number; value: number; easing: "easeInOut" | "easeIn" | "easeOut" | "linear" }[] {
+  const at = (u: number) => Math.round(u * duration);
+  switch (name) {
+    case "slowMoHit": // fast in, slow-motion in the middle, fast out
+      return [{ frame: 0, value: 2, easing: "easeInOut" }, { frame: at(0.35), value: 0.25, easing: "linear" }, { frame: at(0.65), value: 0.25, easing: "easeInOut" }, { frame: duration, value: 2, easing: "linear" }];
+    case "speedUp":
+      return [{ frame: 0, value: 0.5, easing: "easeIn" }, { frame: duration, value: 3, easing: "linear" }];
+    case "slowDown":
+      return [{ frame: 0, value: 3, easing: "easeOut" }, { frame: duration, value: 0.4, easing: "linear" }];
+    case "flashMotion": // whip fast, short slow-mo, whip fast
+      return [{ frame: 0, value: 4, easing: "easeOut" }, { frame: at(0.4), value: 0.3, easing: "easeIn" }, { frame: at(0.6), value: 0.3, easing: "easeIn" }, { frame: duration, value: 4, easing: "linear" }];
+    case "montage": // the classic velocity edit: 1× → 3× → 0.3× → 1×
+      return [{ frame: 0, value: 1, easing: "easeIn" }, { frame: at(0.3), value: 3, easing: "easeInOut" }, { frame: at(0.55), value: 0.3, easing: "easeInOut" }, { frame: duration, value: 1, easing: "linear" }];
+  }
+}
+
+function assertSpeedRampable(p: D, clip: Draft<Clip>, values: number[]) {
+  if (clip.type !== "media") fail("invalid_params", "Only video media clips can have a speed ramp");
+  const a = findAsset(p as Project, clip.assetId);
+  if (a && a.kind !== "video") fail("invalid_params", `Speed ramps need a video clip ("${a.name}" is ${a.kind})`);
+  if (values.some((v) => !(v >= MIN_SPEED && v <= MAX_SPEED))) fail("invalid_params", `Ramp speeds must be between ${MIN_SPEED} and ${MAX_SPEED}`);
+}
 
 /**
  * Editing commands: the only way project state changes.
@@ -90,8 +117,7 @@ function assertClipFitsTrack(p: D, track: Draft<Track>, clip: Clip) {
 /** Shift a clip's start edge by `delta` frames, keeping the content in place. */
 function trimStartBy(p: D, clip: Draft<Clip>, delta: number) {
   if (clip.type === "media" || clip.type === "scene") {
-    const speed = clip.type === "media" ? clip.speed : 1;
-    const nextIn = roundSeconds(clip.sourceIn + (delta / fpsOf(p)) * speed);
+    const nextIn = roundSeconds(clip.sourceIn + sourceOffset(clip as Clip, 0, delta, fpsOf(p)));
     if (nextIn < -1e-6) fail("conflict", "Cannot extend clip before the start of its source");
     clip.sourceIn = Math.max(0, nextIn);
   }
@@ -100,13 +126,23 @@ function trimStartBy(p: D, clip: Draft<Clip>, delta: number) {
   shiftKeyframes(clip, -delta);
 }
 
+/**
+ * Move keyframes by `by` frames after a trim/split (clip.duration already
+ * updated). Keys that fall outside are dropped; a key is inserted at each cut
+ * edge with the value the curve had there, so the animation keeps its shape.
+ */
 function shiftKeyframes(clip: Draft<Clip>, by: number) {
   for (const key of Object.keys(clip.keyframes) as (keyof typeof clip.keyframes)[]) {
     const list = clip.keyframes[key];
-    if (!list) continue;
-    const moved = list.map((k) => ({ ...k, frame: k.frame + by })).filter((k) => k.frame >= 0 && k.frame <= clip.duration);
-    if (moved.length) clip.keyframes[key] = moved;
-    else delete clip.keyframes[key];
+    if (!list?.length) continue;
+    const orig = list.map((k) => ({ ...k }));
+    const moved = orig.map((k) => ({ ...k, frame: k.frame + by }));
+    const inside = moved.filter((k) => k.frame >= 0 && k.frame <= clip.duration);
+    const easingAt = (f: number) => [...moved].reverse().find((k) => k.frame <= f)?.easing ?? orig[0]!.easing;
+    if (moved.some((k) => k.frame < 0) && !inside.some((k) => k.frame === 0)) inside.unshift({ frame: 0, value: evalKeyframes(orig, -by, 0), easing: easingAt(0) });
+    if (moved.some((k) => k.frame > clip.duration) && !inside.some((k) => k.frame === clip.duration))
+      inside.push({ frame: clip.duration, value: evalKeyframes(orig, clip.duration - by, 0), easing: "linear" });
+    clip.keyframes[key] = inside;
   }
 }
 
@@ -587,11 +623,35 @@ export const COMMANDS = {
       const { track, clip } = getClip(p, clipId);
       assertUnlocked(track);
       if (keyframe.frame > clip.duration) fail("invalid_params", `Keyframe frame ${keyframe.frame} is beyond the clip duration ${clip.duration}`);
+      if (property === "speed") assertSpeedRampable(p, clip, [keyframe.value]);
       const list = (clip.keyframes[property] ??= []);
       const i = list.findIndex((k) => k.frame === keyframe.frame);
       if (i >= 0) list[i] = keyframe;
       else list.push(keyframe);
       list.sort((a, b) => a.frame - b.frame);
+      if (property === "speed") clampToSource(p, clip);
+    },
+  }),
+
+  "clip.setSpeedRamp": def({
+    description:
+      "Replace a video clip's speed ramp (velocity edit) with keyframes, a preset, or clear it (null). Speeds 0.1–16×; frames are clip-relative. The clip's own audio is muted while ramped.",
+    params: z.object({
+      clipId: IdSchema,
+      ramp: z.union([z.array(KeyframeInput).min(1).max(200), z.enum(SPEED_RAMP_PRESETS), z.null()]),
+    }),
+    apply(p, { clipId, ramp }) {
+      const { track, clip } = getClip(p, clipId);
+      assertUnlocked(track);
+      if (ramp === null) delete clip.keyframes.speed;
+      else {
+        const keys = typeof ramp === "string" ? speedRampPreset(ramp, clip.duration) : ramp;
+        assertSpeedRampable(p, clip, keys.map((k) => k.value));
+        if (keys.some((k) => k.frame > clip.duration)) fail("invalid_params", `Speed keyframes must lie within the clip (0–${clip.duration})`);
+        clip.keyframes.speed = [...keys].sort((a, b) => a.frame - b.frame);
+      }
+      clampToSource(p, clip);
+      return { duration: clip.duration };
     },
   }),
 
@@ -607,6 +667,7 @@ export const COMMANDS = {
         if (list.length) clip.keyframes[property] = list;
         else delete clip.keyframes[property];
       }
+      if (property === "speed") clampToSource(p, clip);
     },
   }),
 

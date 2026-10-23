@@ -1,7 +1,7 @@
 import { TRANSITIONS } from "./effects.js";
 import { ColorClipSchema, type Clip, type Project, type Transition } from "./schema.js";
 import { fpsValue } from "./time.js";
-import { adjacentPrevious, clipEnd, findAsset, projectDuration } from "./timeline.js";
+import { adjacentPrevious, clipEnd, findAsset, hasSpeedRamp, projectDuration, sourceOffset, speedAt } from "./timeline.js";
 
 /**
  * Composition plan: a renderer-independent description of what is visible and
@@ -94,7 +94,6 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
         warnings.push(`Clip ${clip.id} skipped: media ${asset ? `"${asset.name}" is ${asset.status}` : "is not in the project"}`);
         continue;
       }
-      const speed = media ? media.speed : 1;
       const sourceIn = clip.type === "media" || clip.type === "scene" ? clip.sourceIn : 0;
 
       // Visual layer.
@@ -114,8 +113,8 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
             frames: to - from,
             clipOffset,
             tail,
-            sourceStart: sourceIn + (clipOffset / fps) * speed,
-            speed,
+            sourceStart: sourceIn + sourceOffset(clip, 0, clipOffset, fps),
+            speed: speedAt(clip, clipOffset),
             transitionIn: clip.transitionIn,
             hasOutgoing: !!adjacentPrevious(track, clip),
           });
@@ -142,7 +141,9 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
       }
 
       // Audio segment.
-      if (opts.audio !== false && media && asset?.meta.hasAudio && audible && media.audioEnabled && (track.kind === "audio" || asset.kind === "video")) {
+      const wantsAudio = opts.audio !== false && media && asset?.meta.hasAudio && audible && media.audioEnabled && (track.kind === "audio" || asset.kind === "video");
+      if (wantsAudio && hasSpeedRamp(media)) warnings.push(`Clip "${media.name}": its own audio is muted during the speed ramp`);
+      else if (wantsAudio && media) {
         const from = Math.max(clip.start, rs);
         const to = Math.min(clipEnd(clip), re);
         if (to > from) {
@@ -154,8 +155,8 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
             start: from,
             frames: to - from,
             clipOffset,
-            sourceStart: media.sourceIn + (clipOffset / fps) * speed,
-            speed,
+            sourceStart: media.sourceIn + sourceOffset(media, 0, clipOffset, fps),
+            speed: media.speed,
             gainDb: media.volumeDb + track.volumeDb,
           });
         }
