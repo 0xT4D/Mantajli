@@ -42,15 +42,15 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
       text, audio mix with gain/fades/speed), BT.709 output
 - [x] Export presets (reel/square/landscape 1080, 4K, ProRes master), verification
 - [x] Draft range preview renders
-- [ ] OpenTimelineIO export/import
+- [x] OpenTimelineIO export/import (engine, AI/MCP tools, Export dialog; round trip + third-party file in otio.e2e)
 
 ## M6 Cinematic workflows
 - [x] Beat/downbeat/onset detection → markers, snapping to markers
 - [x] Looks (6), 13 effects, 8 transitions, text animations (fade/slide/pop)
-- [ ] Typewriter text animation, curves editor, wipe transitions
+- [ ] Typewriter text animation, wipe transitions (curves editor done: keyframe graph in M2)
 
 ## M7 AI Director
-- [x] Shared tool layer (50 tools), MCP server (standalone + bridge to app)
+- [x] Shared tool layer (52 tools), MCP server (standalone + bridge to app)
 - [x] Director loop (streaming, approvals, cancel, revert/accept, previews as images)
 - [x] Agent acceptance test over MCP (real renders + export)
 - [!] Live Claude API run of the in-app Director — needs an API key (none on this machine)

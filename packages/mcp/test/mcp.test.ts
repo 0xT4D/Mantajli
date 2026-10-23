@@ -25,7 +25,7 @@ async function connect(home: string) {
   return client;
 }
 
-const text = (r: { content: unknown }) => JSON.parse((r.content as { type: string; text: string }[])[0]!.text);
+const text = (r: Record<string, unknown>) => JSON.parse((r.content as { type: string; text: string }[])[0]!.text);
 
 beforeAll(async () => {
   tmp = await mkdtemp(path.join(os.tmpdir(), "mantagli-mcp-"));

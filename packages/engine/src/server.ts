@@ -9,9 +9,10 @@ import { appDataDir } from "./config.js";
 import { Director } from "./ai/director.js";
 import { executeTool, TOOLS, toolJsonSchema } from "./ai/tools.js";
 import { Engine } from "./engine.js";
+import { exportOtio, importOtio } from "./interchange/otio.js";
 import { availableFontFamilies } from "./render/fonts.js";
 import { ProjectSession } from "./session.js";
-import { isInside, writeFileAtomic } from "./util/fsx.js";
+import { isInside, safeName, writeFileAtomic } from "./util/fsx.js";
 
 export const ENGINE_INFO_FILE = () => path.join(appDataDir(), "engine.json");
 export const ENGINE_VERSION = "0.1.0";
@@ -147,6 +148,13 @@ export class EngineServer {
       const { job } = this.engine.startExport({ preset: p.preset as string | undefined, outPath: p.outPath as string | undefined, range: p.range as never });
       return job;
     },
+
+    "interchange.exportOtio": (p) => {
+      const s = this.engine.requireSession();
+      const out = p.path ? String(p.path) : path.join(s.dir, "exports", `${safeName(s.project.name)}.otio`);
+      return exportOtio(this.engine, out);
+    },
+    "interchange.importOtio": (p) => importOtio(this.engine, String(p.path), "user"),
 
     "jobs.list": () => this.engine.jobs.list(),
     "jobs.cancel": (p) => this.engine.jobs.cancel(String(p.jobId)),

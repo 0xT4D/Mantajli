@@ -79,3 +79,13 @@ Microsoft.VisualStudio.2022.BuildTools` with the VCTools workload).
 AI/MCP may import only from the user's Videos/Music/Pictures/Downloads/Desktop/Documents and
 the project folder; exports only into those or the project. The UI (user-initiated) is not
 restricted.
+
+## D13 — OpenTimelineIO as hand-written otio_json
+No OTIO library (the reference implementation is C++/Python). The engine writes/reads the JSON
+schema directly (Timeline.1, Stack.1, Track.1, Clip.2/Clip.1, Gap.1, Transition.1, Marker.2,
+LinearTimeWarp.1, ExternalReference.1). Each clip also carries its full Mantagli definition in
+`metadata.mantagli` (and the timeline carries scenes), so Mantagli → OTIO → Mantagli is lossless
+while other tools see standard clips. Mantagli's "transition plays over the head of the incoming
+clip" maps to `in_offset = 0, out_offset = duration`. Import adds new tracks in one transaction
+(one undo step); media import happens before it and is not undone. AI/MCP imports enforce the D12
+media boundary on every referenced file, not only on the .otio itself.

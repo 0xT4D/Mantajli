@@ -312,8 +312,62 @@ export function ExportDialog() {
             {job.status === "cancelled" && <div className="mt-1 text-mute">Cancelled. Already rendered 3D frames are kept and reused next time.</div>}
           </div>
         )}
+        <OtioSection />
       </div>
     </Dialog>
+  );
+}
+
+const OTIO_FILTERS = [{ name: "OpenTimelineIO", extensions: ["otio"] }];
+
+/** Timeline interchange with other editors (OpenTimelineIO JSON). */
+function OtioSection() {
+  const { call, toast, session } = useStudio();
+  const [busy, setBusy] = useState(false);
+  const [last, setLast] = useState<string | null>(null);
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } catch {
+      // call() already reported the error
+    } finally {
+      setBusy(false);
+    }
+  };
+  const exportOtio = () =>
+    run(async () => {
+      const r = await pickSavePath({ defaultPath: `${session.project!.name}.otio`, filters: OTIO_FILTERS });
+      if (r === null) return; // dialog cancelled; undefined = browser dev mode → default path
+      const out = await call<{ path: string; clips: number }>("interchange.exportOtio", r ? { path: r } : {});
+      setLast(out.path);
+      toast("ok", `Timeline exported to OTIO (${out.clips} clips)`);
+    });
+  const importOtio = () =>
+    run(async () => {
+      const picked = await pickFiles({ filters: OTIO_FILTERS, title: "Import an OpenTimelineIO timeline" });
+      const file = picked === null ? window.prompt("Path of the .otio file to import") : picked[0];
+      if (!file) return;
+      const r = await call<{ tracks: number; clips: number; markers: number; warnings: string[] }>("interchange.importOtio", { path: file });
+      toast(r.warnings.length ? "info" : "ok", `Imported ${r.clips} clips on ${r.tracks} tracks${r.markers ? `, ${r.markers} markers` : ""}${r.warnings.length ? ` · ${r.warnings.length} warning(s): ${r.warnings[0]}` : ""}`);
+    });
+  return (
+    <div className="space-y-1.5 border-t border-line pt-2">
+      <div className="text-[11px] font-semibold text-dim">Timeline interchange (OpenTimelineIO)</div>
+      <div className="flex gap-2">
+        <Button disabled={busy} onClick={() => void exportOtio()}>
+          Export .otio
+        </Button>
+        <Button disabled={busy} onClick={() => void importOtio()}>
+          Import .otio as new tracks
+        </Button>
+      </div>
+      {last && (
+        <button type="button" className="text-[11px] text-accent-2 hover:underline" onClick={() => void revealInFolder(last)}>
+          {last}
+        </button>
+      )}
+    </div>
   );
 }
 

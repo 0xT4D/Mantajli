@@ -21,8 +21,10 @@ _Last updated: 2026-10-23 (session 1)_
 | Engine bundle (single file + Node runtime) starts and renders 3D via Blender | smoke test + RPC-driven 3D still |
 | Release build + NSIS installer (23.5 MB) | `npx tauri build`; release exe launched, bundled engine running |
 | Preview cancellation leaves no cached output | cancelled a Blender preview mid-render via RPC |
+| OpenTimelineIO export/import: lossless Mantagli round trip, foreign OTIO (Clip.1, relative paths, gaps, dissolves), AI media boundary | `otio.e2e.test.ts`; Export dialog + RPC import checked in the UI (screenshots) |
 
-Test totals: `npm test` + `npm run test:e2e` → 40 tests, all passing (≈85 s, RTX 4060).
+Test totals: `npm test` (runs unit + e2e projects) → 43 tests in 10 files, all passing (≈105 s, RTX 4060).
+`npm run typecheck` clean (fixed a stale MCP SDK result type in `mcp.test.ts`).
 
 ## Known gaps / limitations
 - In-app Director never ran against the real Claude API (no API key on this machine). Request
@@ -31,7 +33,10 @@ Test totals: `npm test` + `npm run test:e2e` → 40 tests, all passing (≈85 s,
 - Live preview shows 3D clips only after "Render 3D previews"; colour effects are approximated
   live (exact when paused/rendered).
 - Undo history is per process (not persisted). Op log persists (`oplog.jsonl`).
-- No OpenTimelineIO interchange, no curve/graph editor, no typewriter text, no wipe transitions.
+- No typewriter text, no wipe transitions.
+- OTIO: flat tracks only (nested stacks skipped with a warning); non-Mantagli transitions import as
+  crossfade; third-party effects other than LinearTimeWarp are ignored. Media imported by an OTIO
+  import is not removed by undoing it (same as normal imports). Not yet opened in Resolve/otioview.
 - Job history is in memory (no SQLite).
 - Installer not yet installed/tested on a clean machine (built and the release exe run in place).
 - Observed once: a black preview still in a release-app session whose window was closed during a

@@ -18,11 +18,13 @@ separate from the home-folder repo).
 1. Live Director run with a real API key (user must provide one): run a brief on the demo
    project (`npx tsx scripts/make-demo.ts tests/.tmp/demo`), watch for API 400s on the request
    shape in `packages/engine/src/ai/director.ts` (`fallbacks`, `output_config`, `thinking`).
-2. UI polish: track reordering by drag, marker dragging, keyframe curve editor, show the
-   draft-rendered 3D frames automatically after scene edits (debounced background render).
-3. OpenTimelineIO export (timeline → .otio JSON) for interchange.
+2. Done since: track reordering, marker dragging, keyframe curve editor, automatic background
+   3D previews, OpenTimelineIO export/import (`engine/src/interchange/otio.ts`, tools
+   `timeline_export_otio` / `timeline_import_otio`, RPC `interchange.*`, Export dialog section).
+   Optional: validate an exported .otio with the Python `opentimelineio` package / Resolve.
+3. More templates/effects: typewriter text animation, wipe transitions (each needs ffgraph +
+   liveCompositor renderers), Cycles GPU quality presets in the UI.
 4. Persist job history (node:sqlite) and undo history across sessions (optional).
-5. More templates/effects: typewriter text, wipes, LUT import UI test, Cycles GPU presets.
 
 ## Dev loop
 ```

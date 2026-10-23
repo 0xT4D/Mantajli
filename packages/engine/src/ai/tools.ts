@@ -31,7 +31,8 @@ import {
   type ErrorCategory,
 } from "@mantagli/core";
 import type { Engine } from "../engine.js";
-import { isInside } from "../util/fsx.js";
+import { exportOtio, importOtio } from "../interchange/otio.js";
+import { isInside, safeName } from "../util/fsx.js";
 
 /**
  * The AI tool layer. One registry, used by the in-app Claude director and the
@@ -775,6 +776,30 @@ export const TOOLS: ToolDef[] = [
         return { data: { jobId: job.id, status: "done", ...r } };
       }
       return { data: { jobId: job.id, status: job.status } };
+    },
+  }),
+  tool({
+    name: "timeline_export_otio",
+    description: "Export the timeline as an OpenTimelineIO (.otio) file for other editors (Resolve, Premiere via adapters, ...). Defaults to <project>/exports/<name>.otio.",
+    input: z.object({ outPath: z.string().optional() }),
+    mutates: false,
+    async run(ctx, i) {
+      const s = session(ctx);
+      const out = i.outPath ? path.resolve(i.outPath) : path.join(s.dir, "exports", `${safeName(s.project.name)}.otio`);
+      if (!mediaRoots(ctx).some((r) => isInside(r, out))) fail("permission_denied", "OTIO path must be inside the project folder or a user media folder");
+      return { data: await exportOtio(ctx.engine, out) };
+    },
+  }),
+  tool({
+    name: "timeline_import_otio",
+    description: "Import an OpenTimelineIO (.otio) timeline into the open project as new tracks (one undo step). Referenced media files are imported.",
+    input: z.object({ path: z.string().min(1) }),
+    mutates: true,
+    async run(ctx, i) {
+      const p = path.resolve(i.path);
+      const roots = mediaRoots(ctx);
+      if (!roots.some((r) => isInside(r, p))) fail("permission_denied", "OTIO file must be inside the project folder or a user media folder");
+      return { data: await importOtio(ctx.engine, p, ctx.source === "mcp" ? "mcp" : "ai", { allowedRoots: roots }) };
     },
   }),
   tool({
