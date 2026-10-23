@@ -25,7 +25,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Thumbnails, filmstrips, waveforms, 540p proxies (background jobs)
 - [x] Relink, auto-relink via project-relative path
 - [x] Atomic saves, autosave, rotating backups, corrupt-file recovery, lock file
-- [~] 3D model / font / LUT assets: imported as references; model rendering test pending
+- [x] 3D models (OBJ verified in Blender turntable), fonts, LUTs imported as references; LUT effect verified (lut.e2e)
 - [ ] Undo history persisted across sessions (in memory only)
 
 ## M4 3D rendering
