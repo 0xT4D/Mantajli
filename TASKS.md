@@ -18,7 +18,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Keyboard shortcuts, toasts, dialogs (new/open/export/settings), welcome screen
 - [x] Track reordering by dragging the header icon
 - [x] Marker dragging on the ruler (beat corrections), plus exact frame in inspector
-- [ ] Curve/graph editor for keyframes (keyframes list + diamonds only)
+- [x] Keyframe curve editor (drag time/value, easing per key, add/delete, playhead line)
 
 ## M3 Media engine
 - [x] Import with validation, ffprobe metadata, duplicate detection, missing-file detection

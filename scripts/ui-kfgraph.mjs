@@ -1,0 +1,22 @@
+// Dev utility: select a clip, drag the second keyframe point in the curve editor.
+import { chromium } from "playwright-core";
+const [out, clipX, clipY] = process.argv.slice(2);
+const browser = await chromium.launch({ channel: "msedge", headless: true });
+const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
+const logs = [];
+page.on("pageerror", (e) => logs.push(e.message));
+await page.goto("http://127.0.0.1:1420/");
+await page.waitForTimeout(3500);
+await page.mouse.click(+clipX, +clipY);
+await page.waitForTimeout(800);
+const pt = page.locator("svg rect.cursor-grab").nth(1);
+await pt.scrollIntoViewIfNeeded();
+const b = await pt.boundingBox();
+await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 8; i++) await page.mouse.move(b.x + b.width / 2 - i * 8, b.y + b.height / 2 + i * 3);
+await page.mouse.up();
+await page.waitForTimeout(1200);
+await page.screenshot({ path: out });
+console.log(logs.join("\n") || "no errors");
+await browser.close();

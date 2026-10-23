@@ -20,6 +20,7 @@ import {
   type Track,
 } from "@mantagli/core";
 import { engine } from "../engine/client";
+import { KeyframeGraph } from "./KeyframeGraph";
 import { useStudio } from "../store/studio";
 import { Button, ColorField, cx, Empty, IconButton, NumberField, PanelHeader, Row, Section, Select, Slider, TextField, Toggle } from "./ui";
 
@@ -395,7 +396,6 @@ function EffectsSection({ clip, project }: { clip: Clip; project: Project }) {
 
 function KeyframesSection({ clip }: { clip: Clip }) {
   const cmd = useCmd();
-  const setPlayhead = useStudio((s) => s.setPlayhead);
   const props = KEYFRAME_PROPERTIES.filter((p) => clip.keyframes[p]?.length);
   if (!props.length) return null;
   return (
@@ -406,13 +406,7 @@ function KeyframesSection({ clip }: { clip: Clip }) {
             <span className="flex-1 capitalize">{p}</span>
             <IconButton size={20} icon={<Trash2 size={11} />} label={`Clear ${p} keyframes`} onClick={() => cmd("keyframe.remove", { clipId: clip.id, property: p }, "Clear keyframes")} />
           </div>
-          <div className="flex flex-wrap gap-1">
-            {clip.keyframes[p]!.map((k) => (
-              <button key={k.frame} type="button" onClick={() => setPlayhead(clip.start + k.frame)} className="tabular rounded bg-raised px-1.5 py-0.5 font-mono text-[10px] hover:bg-hover" title={`${k.easing}`}>
-                {k.frame}f: {Math.round(k.value * 100) / 100}
-              </button>
-            ))}
-          </div>
+          <KeyframeGraph clip={clip} property={p} />
         </div>
       ))}
     </Section>
