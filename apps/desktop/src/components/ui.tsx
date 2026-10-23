@@ -283,13 +283,14 @@ export function Progress({ value, className }: { value: number | null; className
 
 export function Dialog({ title, onClose, children, width = 520, footer }: { title: string; onClose: () => void; children: ReactNode; width?: number; footer?: ReactNode }) {
   useEffect(() => {
+    // Capture phase: fields inside the dialog stop key propagation, Escape must still close it.
     const k = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", k);
-    return () => window.removeEventListener("keydown", k);
+    window.addEventListener("keydown", k, true);
+    return () => window.removeEventListener("keydown", k, true);
   }, [onClose]);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onMouseDown={onClose}>
-      <div className="max-h-[90vh] overflow-hidden rounded-md border border-line-2 bg-panel shadow-2xl" style={{ width }} onMouseDown={(e) => e.stopPropagation()}>
+      <div role="dialog" aria-modal="true" aria-label={title} className="max-h-[90vh] overflow-hidden rounded-md border border-line-2 bg-panel shadow-2xl" style={{ width }} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex h-9 items-center border-b border-line px-3">
           <span className="flex-1 text-[13px] font-semibold">{title}</span>
           <IconButton icon={<X size={14} />} label="Close" onClick={onClose} size={24} />

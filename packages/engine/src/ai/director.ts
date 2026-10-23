@@ -331,7 +331,14 @@ export class Director extends EventEmitter {
       if (signal.aborted) {
         this.setStatus(run, "cancelled");
       } else {
-        const msg = e instanceof Anthropic.AuthenticationError ? "Anthropic API key is missing or invalid (Settings → AI)." : e instanceof Anthropic.APIError ? `Claude API error ${e.status}: ${e.message}` : (e as Error).message;
+        // The SDK throws a plain Error ("Could not resolve authentication method") when no key is set at all.
+        const noKey = !(e instanceof Anthropic.APIError) && /authentication method|api.?key/i.test((e as Error).message);
+        const msg =
+          e instanceof Anthropic.AuthenticationError || noKey
+            ? "Anthropic API key is missing or invalid (Settings → AI). Alternatively, connect Claude Code through the MCP server."
+            : e instanceof Anthropic.APIError
+              ? `Claude API error ${e.status}: ${e.message}`
+              : (e as Error).message;
         this.push(run, { type: "error", message: msg });
         this.setStatus(run, "failed");
       }
