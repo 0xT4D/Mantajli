@@ -10,7 +10,7 @@ committed per feature on `main`.
 
 ## Start here
 1. `git log --oneline | head` and `git status`.
-2. `npm test` runs unit + e2e projects (≈160 s, 71 tests) — all should pass. `npm run typecheck`.
+2. `npm test` runs unit + e2e projects (≈160 s, 74 tests) — all should pass. `npm run typecheck`.
 3. Packaging (verified in session 1): `npm run build:engine`, then
    `source scripts/tauri-env.sh && cd apps/desktop && npx tauri build` (~15 min, LTO).
    Rebuild the installer to ship session-2 features; not yet tested on a clean machine.
@@ -20,16 +20,18 @@ OTIO interchange · typewriter text · wipe/iris transitions · camera shake + b
 effects as curves) · speed ramps (speed keyframes, presets) · blend modes · letterbox · glitch ·
 music ducking + loudness-normalised export · 3D render quality presets + Cycles device in status
 bar · persistent undo history · MCP waits capped at 45 s (`export_status waitSeconds`) ·
-captions (SRT/VTT in, SRT out) · auto edit to beats · reverse + freeze frame · chroma key.
+captions (SRT/VTT in, SRT out, kinetic word-by-word) · auto edit to beats · reverse + freeze frame ·
+chroma key · shape masks.
 
 ## Highest-value next steps
 1. Live Director run with a real API key (user must provide one): run a brief on the demo
    project (`npx tsx scripts/make-demo.ts tests/.tmp/demo`), watch for API 400s on the request
    shape in `packages/engine/src/ai/director.ts` (`fallbacks`, `output_config`, `thinking`).
-2. Ideas not started: shape/garbage masks, auto-reframe (horizontal → vertical with a tracked
+2. Ideas not started: keyframed/animated masks, auto-reframe (horizontal → vertical with a tracked
    crop), speech-to-text captions (needs a local Whisper model), adjustment layers, text presets
    / animated title templates, LUT browser.
-3. Rebuild + install the NSIS package; validate an exported .otio with Python `opentimelineio`.
+3. Installer rebuilt at 21:59 but predates masks/word reveal: rerun `npm run build:engine` +
+   `npx tauri build`, then install on a clean machine; validate an exported .otio with Python `opentimelineio`.
 4. Optional: persist job history; investigate why FFmpeg composition got slower (~3 fps at
    1080×1920 with looks) during session 2 — the same commit was faster earlier.
 
