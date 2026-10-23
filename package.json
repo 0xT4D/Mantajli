@@ -1,0 +1,34 @@
+{
+  "name": "mantagli",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Mantagli — AI-directed 3D video montage studio",
+  "type": "module",
+  "workspaces": [
+    "packages/core",
+    "packages/engine",
+    "packages/mcp",
+    "apps/desktop"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p packages/core && tsc -p packages/engine && tsc -p packages/mcp && tsc -p apps/desktop",
+    "test": "vitest run",
+    "test:e2e": "vitest run --project e2e",
+    "engine": "tsx packages/engine/src/main.ts",
+    "mcp": "tsx packages/mcp/src/main.ts",
+    "dev:ui": "npm run dev -w apps/desktop",
+    "dev": "npm run tauri -w apps/desktop -- dev",
+    "build:engine": "node scripts/build-engine.mjs",
+    "build": "npm run build:engine && npm run tauri -w apps/desktop -- build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

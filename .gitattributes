@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.mp4 binary
+*.blend binary
+example_videos/*.mp4 filter=lfs diff=lfs merge=lfs -text
