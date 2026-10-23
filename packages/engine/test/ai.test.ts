@@ -232,3 +232,21 @@ describe("captions", () => {
     expect(denied.error?.category).toBe("permission_denied");
   });
 });
+
+describe("timeline_add_clip options", () => {
+  it("keeps transform, name and the font asset instead of silently dropping them", async () => {
+    const titles = engine.project.tracks.find((t) => t.kind === "text")!.id;
+    const r = await executeTool(ctx(), "timeline_add_clip", { trackId: titles, type: "text", text: "Hi", start: 0, duration: 30, style: { fontAssetId: "ast_font1", fontSize: 50 }, transform: { y: 250 }, name: "Tagline" });
+    expect(r.ok, JSON.stringify(r.error)).toBe(true);
+    const c = engine.project.tracks.find((t) => t.id === titles)!.clips[0]!;
+    expect(c.transform.y).toBe(250);
+    expect(c.name).toBe("Tagline");
+    expect(c.type === "text" && c.style.fontAssetId).toBe("ast_font1");
+    const m = await executeTool(ctx(), "timeline_add_clip", { trackId: v1(), type: "media", assetId: "ast_vid1", start: 0, duration: 30, transform: { scale: 1.5, x: -100 } });
+    expect(m.ok).toBe(true);
+    const mc = engine.project.tracks.find((t) => t.id === v1())!.clips[0]!;
+    expect([mc.transform.scale, mc.transform.x]).toEqual([1.5, -100]);
+    engine.requireSession().undo(); // add + transform is one step
+    expect(engine.project.tracks.find((t) => t.id === v1())!.clips).toHaveLength(0);
+  });
+});

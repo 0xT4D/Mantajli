@@ -107,7 +107,13 @@ export const SCENE_TEMPLATES: SceneTemplateSpec[] = [
     build(p) {
       const d = p.durationFrames;
       const hero: SceneObject = p.modelAssetId
-        ? makeSceneObject({ kind: "model", name: "Product", model: { assetId: p.modelAssetId } })
+        ? makeSceneObject({
+            kind: "model",
+            name: "Product",
+            model: { assetId: p.modelAssetId },
+            // A chosen material preset overrides the model's own materials.
+            ...(p.material ? { material: { preset: p.material, baseColor: p.accentA ?? "#c0c0c0", metallic: 1, roughness: 0.2, emissionColor: "#000000", emissionStrength: 0, transmission: 0 } } : {}),
+          })
         : makeSceneObject({
             kind: "mesh",
             name: "Product",

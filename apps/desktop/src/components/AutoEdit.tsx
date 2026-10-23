@@ -15,7 +15,9 @@ export function AutoEditDialog() {
   const footage = p.assets.filter((a) => (a.kind === "video" || a.kind === "image") && a.status === "ok");
   const [picked, setPicked] = useState<Set<string>>(() => new Set(footage.filter((a) => a.kind === "video").map((a) => a.id)));
   const visualTracks = p.tracks.filter((t) => t.kind === "video" && !t.locked);
-  const [trackId, setTrackId] = useState(visualTracks.find((t) => t.name === "V1")?.id ?? visualTracks[0]?.id ?? "");
+  // Default to the main picture track: the one with the most clips (V1 on a fresh project).
+  const mainTrack = [...visualTracks].sort((a, b) => b.clips.length - a.clips.length)[0];
+  const [trackId, setTrackId] = useState((mainTrack?.clips.length ? mainTrack : visualTracks.find((t) => t.name === "V1"))?.id ?? visualTracks[0]?.id ?? "");
   // Default range: from the playhead to the end of the music (or 15 s).
   const musicEnd = Math.max(0, ...p.tracks.filter((t) => t.role === "music").flatMap((t) => t.clips.map(clipEnd)));
   const [startSec, setStartSec] = useState(Math.round((playhead / fps) * 100) / 100);

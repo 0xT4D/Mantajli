@@ -333,7 +333,7 @@ export const TOOLS: ToolDef[] = [
   tool({
     name: "timeline_add_clip",
     description:
-      "Place a clip. type=media (assetId, optional sourceIn seconds, speed, duration frames - defaults to remaining source or 3 s for images), type=text (text, duration, style, animation), type=scene (sceneId), type=color (fill). mode=overwrite clears what is underneath; mode=error refuses overlaps.",
+      "Place a clip. type=media (assetId, optional sourceIn seconds, speed, duration frames - defaults to remaining source or 3 s for images), type=text (text, duration, style incl. fontAssetId of an imported font, animation), type=scene (sceneId), type=color (fill). Optional transform {x, y (pixels from frame centre), scale, rotation, fit} and name. mode=overwrite clears what is underneath; mode=error refuses overlaps.",
     input: z.object({
       trackId: Id,
       type: z.enum(["media", "text", "scene", "color"]),
@@ -346,10 +346,13 @@ export const TOOLS: ToolDef[] = [
       text: z.string().max(2000).optional(),
       fill: Hex.optional(),
       style: z
-        .object({ fontFamily: z.string(), bold: z.boolean(), fontSize: z.number(), color: Hex, align: z.enum(["left", "center", "right"]), strokeWidth: z.number(), strokeColor: Hex, shadow: z.boolean(), box: z.boolean(), boxColor: Hex, boxOpacity: z.number() })
+        .object({ fontFamily: z.string(), fontAssetId: Id, bold: z.boolean(), fontSize: z.number(), color: Hex, align: z.enum(["left", "center", "right"]), strokeWidth: z.number(), strokeColor: Hex, shadow: z.boolean(), box: z.boolean(), boxColor: Hex, boxOpacity: z.number() })
         .partial()
         .optional(),
       animation: z.object({ in: z.enum(TEXT_ANIMATIONS), out: z.enum(TEXT_ANIMATIONS), duration: z.number().int().min(1).max(300) }).partial().optional(),
+      /** Position offset from frame centre (project pixels), scale, rotation, fit. */
+      transform: z.object({ x: z.number(), y: z.number(), scale: z.number().positive(), rotation: z.number(), fit: z.enum(["fill", "fit", "stretch"]) }).partial().optional(),
+      name: z.string().max(120).optional(),
       mode: z.enum(["overwrite", "error"]).default("overwrite"),
     }),
     mutates: true,
@@ -369,7 +372,13 @@ export const TOOLS: ToolDef[] = [
           clip = { type: "color" as const, fill: i.fill ?? "#000000", start: i.start, duration: i.duration ?? fail("invalid_params", "duration required for colour clips") };
           break;
       }
-      return { data: session(ctx).dispatch("clip.add", { trackId: i.trackId, clip, mode: i.mode }, ctx.source, label("add clip")) };
+      return {
+        data: session(ctx).transaction(label("add clip"), ctx.source, (tx) => {
+          const r = tx.dispatch("clip.add", { trackId: i.trackId, clip, mode: i.mode });
+          if (i.transform || i.name) tx.dispatch("clip.update", { clipId: r.clipId, props: { ...(i.transform ? { transform: i.transform } : {}), ...(i.name ? { name: i.name } : {}) } });
+          return r;
+        }),
+      };
     },
   }),
   tool({
