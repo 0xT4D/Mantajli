@@ -32,7 +32,7 @@ import {
 import { buildSceneFromTemplate, SCENE_TEMPLATE_IDS } from "./sceneTemplates.js";
 import { TEXT_ANIMATIONS } from "./effects.js";
 import { roundSeconds } from "./time.js";
-import { clipEnd, clipsInRange, evalKeyframes, findAsset, findScene, MAX_SPEED, maxClipDuration, MIN_SPEED, sortTrackClips, sourceOffset } from "./timeline.js";
+import { clipEnd, clipsInRange, evalKeyframes, hasSpeedRamp, sourceTimeAt, findAsset, findScene, MAX_SPEED, maxClipDuration, MIN_SPEED, sortTrackClips, sourceOffset } from "./timeline.js";
 
 export const SPEED_RAMP_PRESETS = ["slowMoHit", "speedUp", "slowDown", "flashMotion", "montage"] as const;
 export type SpeedRampPreset = (typeof SPEED_RAMP_PRESETS)[number];
@@ -118,7 +118,8 @@ function assertClipFitsTrack(p: D, track: Draft<Track>, clip: Clip) {
 
 /** Shift a clip's start edge by `delta` frames, keeping the content in place. */
 function trimStartBy(p: D, clip: Draft<Clip>, delta: number) {
-  if (clip.type === "media" || clip.type === "scene") {
+  // A reversed clip shows its source backwards: its start edge is the end of the source range.
+  if ((clip.type === "media" && !clip.reverse) || clip.type === "scene") {
     const nextIn = roundSeconds(clip.sourceIn + sourceOffset(clip as Clip, 0, delta, fpsOf(p)));
     if (nextIn < -1e-6) fail("conflict", "Cannot extend clip before the start of its source");
     clip.sourceIn = Math.max(0, nextIn);
@@ -126,6 +127,16 @@ function trimStartBy(p: D, clip: Draft<Clip>, delta: number) {
   clip.start += delta;
   clip.duration -= delta;
   shiftKeyframes(clip, -delta);
+}
+
+/** Set a clip's duration by moving its end edge (reversed clips move their source in-point instead). */
+function setEndDuration(p: D, clip: Draft<Clip>, duration: number) {
+  if (clip.type === "media" && clip.reverse) {
+    const nextIn = roundSeconds(clip.sourceIn + sourceOffset(clip as Clip, duration, clip.duration, fpsOf(p)));
+    if (nextIn < -1e-6) fail("conflict", "Cannot extend a reversed clip past the start of its source");
+    clip.sourceIn = Math.max(0, nextIn);
+  }
+  clip.duration = duration;
 }
 
 /**
@@ -486,7 +497,7 @@ export const COMMANDS = {
         trimStartBy(p, clip, frame - clip.start);
       } else {
         if (frame <= clip.start) fail("invalid_params", "End trim must be after the clip start");
-        clip.duration = frame - clip.start;
+        setEndDuration(p, clip, frame - clip.start);
         clampToSource(p, clip);
         shiftKeyframes(clip, 0);
       }
@@ -507,7 +518,7 @@ export const COMMANDS = {
       if (frame <= clip.start || frame >= clipEnd(clip)) fail("invalid_params", `Split frame ${frame} must be inside the clip (${clip.start}–${clipEnd(clip)})`);
       const right = cloneClip(clip as Clip) as Draft<Clip>;
       const fadeOut = clip.fadeOut;
-      clip.duration = frame - clip.start;
+      setEndDuration(p, clip, frame - clip.start);
       clip.fadeOut = 0;
       shiftKeyframes(clip, 0);
       trimStartBy(p, right, frame - right.start);
@@ -566,6 +577,8 @@ export const COMMANDS = {
         sourceIn: z.number().nonnegative().optional(),
         volumeDb: z.number().min(-60).max(24).optional(),
         audioEnabled: z.boolean().optional(),
+        reverse: z.boolean().optional(),
+        freeze: z.boolean().optional(),
         text: z.string().min(1).max(2000).optional(),
         style: patchSchema(TextStyleSchema).optional(),
         animation: z.object({ in: z.enum(TEXT_ANIMATIONS), out: z.enum(TEXT_ANIMATIONS), duration: z.number().int().min(1).max(300) }).partial().optional(),
@@ -597,7 +610,15 @@ export const COMMANDS = {
         if (clip.type === "media" || clip.type === "scene") clip.sourceIn = props.sourceIn;
         else reject("sourceIn");
       }
-      if (props.speed !== undefined || props.sourceIn !== undefined) clampToSource(p, clip);
+      for (const k of ["reverse", "freeze"] as const)
+        if (props[k] !== undefined) {
+          if (clip.type !== "media") return reject(k);
+          const a = findAsset(p as Project, clip.assetId);
+          if (props[k] && a && (k === "freeze" ? a.kind !== "video" : a.kind === "image")) fail("invalid_params", `${k} needs a ${k === "freeze" ? "video" : "video or audio"} clip`);
+          if (props[k] && hasSpeedRamp(clip as Clip)) fail("invalid_params", `Remove the speed ramp before using ${k}`);
+          clip[k] = props[k];
+        }
+      if (props.speed !== undefined || props.sourceIn !== undefined || props.freeze === false) clampToSource(p, clip);
       if (props.text !== undefined || props.style || props.animation) {
         if (clip.type !== "text") return reject("text/style/animation");
         if (props.text !== undefined) clip.text = props.text;
@@ -636,6 +657,7 @@ export const COMMANDS = {
       assertUnlocked(track);
       if (keyframe.frame > clip.duration) fail("invalid_params", `Keyframe frame ${keyframe.frame} is beyond the clip duration ${clip.duration}`);
       if (property === "speed") assertSpeedRampable(p, clip, [keyframe.value]);
+      if (property === "speed" && clip.type === "media" && (clip.reverse || clip.freeze)) fail("invalid_params", "Speed ramps cannot be combined with reverse or freeze");
       const list = (clip.keyframes[property] ??= []);
       const i = list.findIndex((k) => k.frame === keyframe.frame);
       if (i >= 0) list[i] = keyframe;
@@ -659,6 +681,7 @@ export const COMMANDS = {
       else {
         const keys = typeof ramp === "string" ? speedRampPreset(ramp, clip.duration) : ramp;
         assertSpeedRampable(p, clip, keys.map((k) => k.value));
+        if (clip.type === "media" && (clip.reverse || clip.freeze)) fail("invalid_params", "Speed ramps cannot be combined with reverse or freeze");
         if (keys.some((k) => k.frame > clip.duration)) fail("invalid_params", `Speed keyframes must lie within the clip (0–${clip.duration})`);
         clip.keyframes.speed = [...keys].sort((a, b) => a.frame - b.frame);
       }
@@ -793,6 +816,28 @@ export const COMMANDS = {
         if (o.pulse > 0) sub(p, "effect.add", { clipId: r.clipId, type: "beatPulse", params: { zoom: o.pulse, on: o.on } });
       }
       return { clipIds, shots: clipIds.length };
+    },
+  }),
+
+  "clip.freezeFrame": def({
+    description: "Freeze frame: split a video clip at an absolute frame and insert a held still of that frame for `duration` frames; later clips on the track move right (ripple).",
+    params: z.object({ clipId: IdSchema, frame: z.number().int().nonnegative(), duration: z.number().int().min(1).max(100_000) }),
+    apply(p, { clipId, frame, duration }): { clipId: string } {
+      const { track, clip } = getClip(p, clipId);
+      assertUnlocked(track);
+      if (clip.type !== "media") fail("invalid_params", "Freeze frames need a video clip");
+      const a = findAsset(p as Project, clip.assetId);
+      if (a && a.kind !== "video") fail("invalid_params", `Freeze frames need a video clip ("${a.name}" is ${a.kind})`);
+      if (frame < clip.start || frame >= clipEnd(clip)) fail("invalid_params", `Frame ${frame} is outside the clip (${clip.start}–${clipEnd(clip)})`);
+      const held = sourceTimeAt(clip as Clip, frame - clip.start, fpsOf(p));
+      // Ripple: everything from the freeze point onwards moves right (last first, so nothing overlaps).
+      if (frame > clip.start) sub(p, "clip.split", { clipId, frame });
+      for (const c of [...track.clips].filter((c) => c.start >= frame).sort((x, y) => y.start - x.start)) c.start += duration;
+      const still = cloneClip(clip as Clip) as Draft<Clip & { type: "media" }>;
+      Object.assign(still, { start: frame, duration, sourceIn: roundSeconds(held), freeze: true, reverse: false, speed: 1, keyframes: {}, transitionIn: null, fadeIn: 0, fadeOut: 0, name: `${clip.name} (freeze)` });
+      track.clips.push(still);
+      sortTrackClips(track as Track);
+      return { clipId: still.id };
     },
   }),
 

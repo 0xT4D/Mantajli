@@ -67,8 +67,21 @@ export function sourceSecondsFor(p: Project, clip: Clip, frames: number): number
   return sourceOffset(clip, 0, frames, fpsValue(p.settings.fps));
 }
 
+/**
+ * Source time (seconds) shown at a clip-relative frame: forward, held
+ * (freeze) or backwards (reverse: displayed frame f is forward frame
+ * duration-1-f of the same source range).
+ */
+export function sourceTimeAt(clip: Clip, frame: number, fps: number): number {
+  if (clip.type !== "media" && clip.type !== "scene") return 0;
+  if (clip.type === "media" && clip.freeze) return clip.sourceIn;
+  const f = clip.type === "media" && clip.reverse ? clip.duration - 1 - frame : frame;
+  return clip.sourceIn + sourceOffset(clip, 0, f, fps);
+}
+
 /** Maximum timeline duration the clip can have given its source and sourceIn. */
 export function maxClipDuration(p: Project, clip: Clip): number {
+  if (clip.type === "media" && clip.freeze) return Number.MAX_SAFE_INTEGER;
   const len = sourceLength(p, clip);
   if (!Number.isFinite(len)) return Number.MAX_SAFE_INTEGER;
   const sourceIn = clip.type === "media" || clip.type === "scene" ? clip.sourceIn : 0;
@@ -191,6 +204,7 @@ export function speedAt(clip: Clip, frame: number): number {
  * its midpoint, so ramps integrate identically in the export and the preview.
  */
 export function sourceOffset(clip: Clip, from: number, to: number, fps: number): number {
+  if (clip.type === "media" && clip.freeze) return 0;
   if (!hasSpeedRamp(clip)) return ((to - from) / fps) * (clip.type === "media" ? clip.speed : 1);
   const [a, b, sign] = to >= from ? [from, to, 1] : [to, from, -1];
   let s = 0;

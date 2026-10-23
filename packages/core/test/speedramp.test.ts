@@ -126,3 +126,47 @@ describe("auto edit to beats", () => {
     expect(() => applyCommand(p, "timeline.autoEdit", { trackId: v2, assetIds: ["ast_img"], start: 1000, end: 1100 })).toThrow(/No beats markers/);
   });
 });
+
+describe("reverse and freeze", () => {
+  const fps = 30;
+  it("maps reversed frames, keeps continuity across trims and splits", async () => {
+    const { sourceTimeAt } = await import("../src/index.js");
+    let { p, clipId } = setup(); // 90 frames from sourceIn 1 s at 30 fps
+    p = applyCommand(p, "clip.update", { clipId, props: { reverse: true } }).project;
+    const c = clipOf(p, clipId);
+    expect(sourceTimeAt(c, 0, fps)).toBeCloseTo(1 + 89 / 30);
+    expect(sourceTimeAt(c, 89, fps)).toBeCloseTo(1);
+    const shown = (q: Project, id: string, f: number) => sourceTimeAt(clipOf(q, id), f, fps);
+    // Split at timeline frame 30: both halves show exactly what the whole clip showed.
+    const s = applyCommand(p, "clip.split", { clipId, frame: 30 });
+    expect(shown(s.project, s.result.leftId, 0)).toBeCloseTo(shown(p, clipId, 0));
+    expect(shown(s.project, s.result.leftId, 29)).toBeCloseTo(shown(p, clipId, 29));
+    expect(shown(s.project, s.result.rightId, 0)).toBeCloseTo(shown(p, clipId, 30));
+    expect(shown(s.project, s.result.rightId, 59)).toBeCloseTo(shown(p, clipId, 89));
+    // Trimming the end of a reversed clip keeps the frames that remain.
+    const t = applyCommand(p, "clip.trim", { clipId, edge: "end", frame: 60 }).project;
+    expect(shown(t, clipId, 0)).toBeCloseTo(shown(p, clipId, 0));
+    expect(shown(t, clipId, 59)).toBeCloseTo(shown(p, clipId, 59));
+    // Trimming the start too.
+    const ts = applyCommand(p, "clip.trim", { clipId, edge: "start", frame: 10 }).project;
+    expect(shown(ts, clipId, 0)).toBeCloseTo(shown(p, clipId, 10));
+    expect(() => applyCommand(p, "clip.setSpeedRamp", { clipId, ramp: "montage" })).toThrow(/reverse or freeze/);
+  });
+
+  it("inserts a freeze frame and ripples the rest of the track", async () => {
+    const { sourceTimeAt, buildCompositionPlan } = await import("../src/index.js");
+    let { p, clipId } = setup();
+    const v1 = p.tracks.find((t) => t.name === "V1")!.id;
+    p = applyCommand(p, "clip.add", { trackId: v1, clip: { type: "media", assetId: "ast_v", start: 120, duration: 30 } }).project;
+    const r = applyCommand(p, "clip.freezeFrame", { clipId, frame: 40, duration: 15 });
+    const clips = r.project.tracks.find((t) => t.id === v1)!.clips;
+    expect(clips.map((c) => [c.start, c.duration])).toEqual([[0, 40], [40, 15], [55, 50], [135, 30]]);
+    const still = clips[1]!;
+    expect(still.type === "media" && still.freeze).toBe(true);
+    expect(sourceTimeAt(still, 0, fps)).toBeCloseTo(sourceTimeAt(clipOf(p, clipId), 40, fps));
+    expect(sourceTimeAt(still, 14, fps)).toBeCloseTo(sourceTimeAt(still, 0, fps));
+    // Freeze frames are silent.
+    const plan = buildCompositionPlan(r.project, { rangeStart: 45, rangeEnd: 46 });
+    expect(plan.audio.some((a) => a.clip.id === still.id)).toBe(false);
+  });
+});

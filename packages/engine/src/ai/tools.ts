@@ -511,6 +511,15 @@ export const TOOLS: ToolDef[] = [
     },
   }),
   tool({
+    name: "timeline_freeze_frame",
+    description: "Freeze frame: split a video clip at an absolute timeline frame and insert a held still of that frame for duration frames (keeps the clip's look/transform). Later clips on the track move right.",
+    input: z.object({ clipId: Id, frame: Frame, duration: z.number().int().min(1).max(100000) }),
+    mutates: true,
+    async run(ctx, i) {
+      return { data: session(ctx).dispatch("clip.freezeFrame", i, ctx.source, label("freeze frame")) };
+    },
+  }),
+  tool({
     name: "timeline_set_speed_ramp",
     description: `Speed ramp / velocity edit on a video clip: a preset (${SPEED_RAMP_PRESETS.join(", ")}), explicit speed keyframes (clip-relative frames, 0.1-16x), or null to clear. The clip is shortened if the ramp would run past its source; its own audio is muted while ramped. Great on beat drops: fast into the drop, slow-mo on the hit.`,
     input: z.object({
@@ -524,7 +533,7 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "timeline_set_clip_properties",
-    description: "Change clip properties: opacity, transform {x,y,scale,rotation,fit,crop}, fadeIn/fadeOut frames, speed, sourceIn, volumeDb, audioEnabled, text, style, animation, fill, name.",
+    description: "Change clip properties: opacity, blendMode, transform {x,y,scale,rotation,fit,crop}, fadeIn/fadeOut frames, speed, sourceIn, volumeDb, audioEnabled, reverse (play backwards), text, style, animation, fill, name.",
     input: z.object({ clipId: Id, props: z.record(z.string(), z.unknown()) }),
     mutates: true,
     async run(ctx, i) {

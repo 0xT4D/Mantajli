@@ -159,6 +159,10 @@ export const MediaClipSchema = z.object({
   speed: z.number().min(0.1).max(16).default(1),
   volumeDb: z.number().min(-60).max(24).default(0),
   audioEnabled: z.boolean().default(true),
+  /** Play the source range [sourceIn, sourceIn + span) backwards (video and audio). */
+  reverse: z.boolean().default(false),
+  /** Hold the frame at sourceIn for the whole clip (freeze frame; silent). */
+  freeze: z.boolean().default(false),
 });
 export type MediaClip = z.infer<typeof MediaClipSchema>;
 

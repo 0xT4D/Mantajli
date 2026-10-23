@@ -124,7 +124,8 @@ export class LiveCompositor {
         } else {
           const v = this.video(clip, asset);
           activeVideo.add(clip.id);
-          this.syncMedia(v, layer, playing);
+          // Held and reversed frames are stepped by seeking (browsers cannot play backwards).
+          this.syncMedia(v, layer, playing && !clip.freeze && !clip.reverse);
           if (v.readyState >= 2) [src, sw, sh] = [v, v.videoWidth, v.videoHeight];
         }
       } else if (clip.type === "scene") {
@@ -261,6 +262,7 @@ export class LiveCompositor {
     const active = new Set<string>();
     if (playing) {
       for (const seg of segments) {
+        if (seg.clip.reverse) continue; // reversed audio is exact in renders only
         const asset = findAsset(project, seg.assetId);
         if (!asset) continue;
         active.add(seg.clip.id);

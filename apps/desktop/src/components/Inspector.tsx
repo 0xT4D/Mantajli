@@ -124,6 +124,18 @@ function KeyButton({ clip, prop }: { clip: Clip; prop: KeyframeProperty }) {
   );
 }
 
+/** Insert a held frame (1 s) at the playhead, rippling the rest of the track. */
+function FreezeButton({ clip, fps }: { clip: Clip; fps: number }) {
+  const playhead = useStudio((s) => s.playhead);
+  const cmd = useCmd();
+  const inside = playhead >= clip.start && playhead < clip.start + clip.duration;
+  return (
+    <Button disabled={!inside} onClick={() => cmd("clip.freezeFrame", { clipId: clip.id, frame: playhead, duration: Math.round(fps) }, "Freeze frame")}>
+      Freeze 1 s at playhead
+    </Button>
+  );
+}
+
 /** Edits a keyframable property: sets the keyframe at the playhead if animated, else the base value. */
 function useAnimatedSetter(clip: Clip) {
   const playhead = useStudio((s) => s.playhead);
@@ -187,6 +199,14 @@ function ClipInspector({ project, clip, track }: { project: Project; clip: Clip;
                   { value: "slowDown", label: "Slow down" },
                 ]}
               />
+            </Row>
+            <Row label="Time" title="Reverse plays the clip backwards (audio too). Freeze holds the frame at the playhead, pushing later clips right.">
+              <Toggle checked={clip.reverse} onChange={(v) => upd({ reverse: v }, v ? "Reverse clip" : "Play forward")} label="Reverse" />
+              {clip.freeze ? (
+                <span className="text-[11px] text-dim">Freeze frame</span>
+              ) : (
+                <FreezeButton clip={clip} fps={fps} />
+              )}
             </Row>
           </>
         )}

@@ -349,6 +349,18 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
             const ramp = rampRetime(clip, layer.clipOffset, layer.frames, fps, lead);
             inputs.push(["-ss", n6(layer.sourceStart - lead), "-t", n6(lead + ramp.sourceSeconds + 0.5), "-i", file]);
             stmts.push(`[${inputs.length - 1}:v]${ramp.filter},fps=${fpsR}[${src}]`);
+          } else if (clip.freeze) {
+            // Held frame: the latest source frame at or before sourceIn (player semantics),
+            // found by seeking a little early; the layer chain's tpad holds it.
+            const lead = Math.min(clip.sourceIn, 0.2);
+            inputs.push(["-ss", n6(clip.sourceIn - lead), "-t", n6(lead + 0.1), "-i", file]);
+            stmts.push(`[${inputs.length - 1}:v]trim=end=${n6(lead + 0.0005)},reverse,trim=end_frame=1,setpts=PTS-STARTPTS,fps=${fpsR}[${src}]`);
+          } else if (clip.reverse) {
+            // Decode only the forward segment behind the layer's frames, then play it backwards.
+            const fwdStart = clip.sourceIn + sourceOffset(clip, 0, clip.duration - layer.clipOffset - layer.frames, fps);
+            inputs.push(["-ss", n6(fwdStart), "-t", n6(layerSec * layer.speed + 0.5), "-i", file]);
+            const retime = layer.speed === 1 ? "setpts=PTS-STARTPTS" : `setpts=(PTS-STARTPTS)/${n6(layer.speed)}`;
+            stmts.push(`[${inputs.length - 1}:v]${retime},fps=${fpsR},tpad=stop_mode=clone:stop=${layer.frames},trim=end_frame=${layer.frames},reverse,setpts=PTS-STARTPTS[${src}]`);
           } else {
             const srcSeconds = layerSec * layer.speed + 0.5;
             inputs.push(["-ss", n6(layer.sourceStart), "-t", n6(srcSeconds), "-i", file]);
@@ -578,7 +590,10 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     plan.audio.forEach((seg, k) => {
       const asset = findAsset(project, seg.assetId)!;
       const segSec = seg.frames / fps;
-      inputs.push(["-ss", n6(seg.sourceStart), "-t", n6(segSec * seg.speed + 0.3), "-i", ctx.mediaPath(asset)]);
+      // Reversed clips: decode the forward source span behind this segment, reverse after trimming.
+      const rev = seg.clip.reverse;
+      const from = rev ? seg.clip.sourceIn + sourceOffset(seg.clip, 0, seg.clip.duration - seg.clipOffset - seg.frames, fps) : seg.sourceStart;
+      inputs.push(["-ss", n6(from), "-t", n6(segSec * seg.speed + 0.3), "-i", ctx.mediaPath(asset)]);
       const idx = inputs.length - 1;
       const f: string[] = ["asetpts=PTS-STARTPTS"];
       let sp = seg.speed;
@@ -592,6 +607,7 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
       }
       if (Math.abs(sp - 1) > 1e-6) f.push(`atempo=${n6(sp)}`);
       f.push(`aresample=${SR}`, "aformat=sample_fmts=fltp:channel_layouts=stereo", "apad", `atrim=end_sample=${Math.round(segSec * SR)}`);
+      if (rev) f.push("areverse", "asetpts=PTS-STARTPTS");
       // Gain in dB (keyframes + track) and linear fades, as one expression of clip time.
       const c = seg.clip;
       const Ta = plus("t", seg.clipOffset / fps);

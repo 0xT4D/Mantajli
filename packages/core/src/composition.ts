@@ -2,7 +2,7 @@ import { TRANSITIONS } from "./effects.js";
 import { ColorClipSchema, type Clip, type MixSettings, type Project, type Transition } from "./schema.js";
 import type { Curve } from "./animation.js";
 import { fpsValue } from "./time.js";
-import { adjacentPrevious, clipEnd, findAsset, hasSpeedRamp, projectDuration, sourceOffset, speedAt } from "./timeline.js";
+import { adjacentPrevious, clipEnd, findAsset, hasSpeedRamp, projectDuration, sourceTimeAt, speedAt } from "./timeline.js";
 
 /**
  * Composition plan: a renderer-independent description of what is visible and
@@ -99,7 +99,6 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
         warnings.push(`Clip ${clip.id} skipped: media ${asset ? `"${asset.name}" is ${asset.status}` : "is not in the project"}`);
         continue;
       }
-      const sourceIn = clip.type === "media" || clip.type === "scene" ? clip.sourceIn : 0;
 
       // Visual layer.
       if (opts.video !== false && track.kind !== "audio" && !track.hidden && !(asset && asset.kind === "audio")) {
@@ -118,7 +117,7 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
             frames: to - from,
             clipOffset,
             tail,
-            sourceStart: sourceIn + sourceOffset(clip, 0, clipOffset, fps),
+            sourceStart: sourceTimeAt(clip, clipOffset, fps),
             speed: speedAt(clip, clipOffset),
             transitionIn: clip.transitionIn,
             hasOutgoing: !!adjacentPrevious(track, clip),
@@ -146,7 +145,7 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
       }
 
       // Audio segment.
-      const wantsAudio = opts.audio !== false && media && asset?.meta.hasAudio && audible && media.audioEnabled && (track.kind === "audio" || asset.kind === "video");
+      const wantsAudio = opts.audio !== false && media && !media.freeze && asset?.meta.hasAudio && audible && media.audioEnabled && (track.kind === "audio" || asset.kind === "video");
       if (wantsAudio && hasSpeedRamp(media)) warnings.push(`Clip "${media.name}": its own audio is muted during the speed ramp`);
       else if (wantsAudio && media) {
         const from = Math.max(clip.start, rs);
@@ -160,7 +159,7 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
             start: from,
             frames: to - from,
             clipOffset,
-            sourceStart: media.sourceIn + sourceOffset(media, 0, clipOffset, fps),
+            sourceStart: sourceTimeAt(media, clipOffset, fps),
             speed: media.speed,
             gainDb: media.volumeDb + track.volumeDb,
             duck: track.role === "music" ? duckCurve(duckSpans, p.mix.ducking, clip.start) : [],

@@ -53,4 +53,53 @@ describe("speed ramps", () => {
       if (f > 10) expect(await psnr(still, wrong)).toBeLessThan(good - 3);
     }
   });
+
+  it("renders reversed clips, freeze frames and reversed audio", async () => {
+    const { sourceTimeAt } = await import("@mantagli/core");
+    const media = await makeFixtures();
+    const s = engine.requireSession();
+    const v1 = s.project.tracks.find((t) => t.name === "V1")!.id;
+    const clip0 = s.project.tracks.find((t) => t.id === v1)!.clips[0]!;
+    s.dispatch("clip.setSpeedRamp", { clipId: clip0.id, ramp: null });
+    s.dispatch("clip.update", { clipId: clip0.id, props: { reverse: true } });
+    const frameAt = (sec: number, out: string) =>
+      run("ffmpeg", ["-v", "error", "-y", "-i", media.video, "-vf", `select='eq(n\\,${Math.floor(sec * 30 + 1e-6)})',scale=1920:1080`, "-frames:v", "1", out], { timeoutMs: 30000 });
+    const dir = path.join(TMP, "ramp");
+    const clipNow = () => s.project.tracks.find((t) => t.id === v1)!.clips[0]!;
+    for (const f of [0, 31, 59]) {
+      const still = (await engine.renderStill(f, { scale: 1 })).path;
+      const ref = path.join(dir, `rev_${f}.png`);
+      await frameAt(sourceTimeAt(clipNow(), f, 30), ref);
+      expect(await psnr(still, ref), `reversed frame ${f}`).toBeGreaterThan(30);
+    }
+
+    // Freeze 20 frames at timeline frame 15: every held frame shows the same source frame.
+    s.dispatch("clip.update", { clipId: clip0.id, props: { reverse: false } });
+    const fr = s.dispatch("clip.freezeFrame", { clipId: clip0.id, frame: 15, duration: 20 });
+    const held = s.project.tracks.find((t) => t.id === v1)!.clips.find((c) => c.id === fr.clipId)!;
+    const a = (await engine.renderStill(16, { scale: 1 })).path;
+    const b = (await engine.renderStill(33, { scale: 1 })).path;
+    const ref = path.join(dir, "freeze.png");
+    await frameAt(sourceTimeAt(held, 0, 30), ref);
+    expect(await psnr(a, ref)).toBeGreaterThan(30);
+    expect(await psnr(b, ref)).toBeGreaterThan(30);
+
+    // Reversed audio: 1 s of silence then 1 s of tone plays as tone then silence.
+    const wav = path.join(dir, "silence_tone.wav");
+    await run("ffmpeg", ["-v", "error", "-y", "-f", "lavfi", "-i", "aevalsrc='if(gte(t,1),0.5*sin(2*PI*440*t),0)':s=48000:d=2", "-ac", "2", wav], { timeoutMs: 30000 });
+    const imp = await engine.importMedia([wav]);
+    const music = s.project.tracks.find((t) => t.role === "music")!.id;
+    const ac = s.dispatch("clip.add", { trackId: music, clip: { type: "media", assetId: imp.imported[0]!.id, start: 0, duration: 60 } });
+    s.dispatch("clip.update", { clipId: ac.clipId, props: { reverse: true } });
+    s.dispatch("track.update", { trackId: v1, muted: true }); // the video's own tone would mask the check
+    const vid = (await engine.renderPreviewRange(0, 60, { scale: 0.25 })).path;
+    const rms = async (from: number) => {
+      const r = await run("ffmpeg", ["-hide_banner", "-nostats", "-ss", String(from), "-t", "0.6", "-i", vid, "-af", "astats=measure_perchannel=none", "-f", "null", "-"], { timeoutMs: 30000 });
+      return Number(/RMS level dB:\s*(-?[\d.]+|-inf)/.exec(r.stderr.split("Overall").pop()!)?.[1] ?? -200);
+    };
+    const first = await rms(0.2);
+    const second = await rms(1.2);
+    expect(first).toBeGreaterThan(-20);
+    expect(second < -60 || Number.isNaN(second)).toBe(true);
+  });
 });
