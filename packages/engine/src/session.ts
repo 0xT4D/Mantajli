@@ -187,6 +187,17 @@ export class ProjectSession extends EventEmitter {
     return value;
   }
 
+  /** Replace the whole project state (e.g. revert an AI run) as one undoable step. */
+  restore(target: Project, label: string, source: ChangeSource = "user"): void {
+    this.assertOpen();
+    const before = this._project;
+    const after = carryAssetState(target, before);
+    if (after === before) return;
+    this.history.record({ label, source, before, after });
+    this.setProject(after, { label, source, kind: "command" });
+    void this.log(source, label);
+  }
+
   /** Non-undoable bookkeeping updates (derived media, analysis, status). */
   applySystem<N extends CommandName>(name: N, params: CommandParams<N>): CommandResult<N> {
     this.assertOpen();

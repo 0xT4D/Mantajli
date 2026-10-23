@@ -7,3 +7,6 @@ export * from "./media/probe.js";
 export * from "./render/blender.js";
 export * from "./render/compose.js";
 export * from "./render/ffgraph.js";
+export * from "./ai/director.js";
+export * from "./ai/tools.js";
+export * from "./server.js";
