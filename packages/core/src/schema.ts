@@ -126,6 +126,10 @@ export const TransitionSchema = z.object({
 });
 export type Transition = z.infer<typeof TransitionSchema>;
 
+/** Layer blend modes (FFmpeg blend filter / canvas globalCompositeOperation). */
+export const BLEND_MODES = ["normal", "screen", "add", "multiply", "overlay", "softLight", "lighten", "darken", "difference"] as const;
+export type BlendMode = (typeof BLEND_MODES)[number];
+
 const ClipBase = {
   id: IdSchema,
   name: z.string().default(""),
@@ -134,6 +138,8 @@ const ClipBase = {
   /** Timeline duration, in project frames. */
   duration: z.number().int().positive(),
   opacity: z.number().min(0).max(1).default(1),
+  /** How the layer combines with the layers below it. */
+  blendMode: z.enum(BLEND_MODES).default("normal"),
   transform: TransformSchema.default(TransformSchema.parse({})),
   /** Fade from/to transparent (video) and silence (audio), in frames. */
   fadeIn: z.number().int().nonnegative().default(0),

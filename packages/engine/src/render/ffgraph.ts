@@ -8,12 +8,16 @@ import {
   hasSpeedRamp,
   MASK_FEATHER,
   MOTION_EFFECTS,
+  FRAME_EFFECTS,
+  glitchAt,
+  letterboxBar,
   sourceOffset,
   speedAt,
   revealLines,
   textReveal,
   transitionMask,
   type Asset,
+  type BlendMode,
   type Clip,
   type CompositionPlan,
   type Curve,
@@ -140,7 +144,16 @@ function hueRgb(hueDeg: number, amount: number): [number, number, number] {
  * Append effect filters. Returns graph statements and the output label.
  * Input is assumed opaque; alpha layers are wrapped by the caller.
  */
-function effectStatements(effects: Effect[], inLabel: string, id: string, px: number, ctx: GraphContext): { stmts: string[]; out: string } {
+/** Where a layer sits in clip time, for per-frame (sendcmd) effects. */
+interface LayerTiming {
+  clipOffset: number;
+  frames: number;
+  fps: number;
+  /** Output width in pixels. */
+  width: number;
+}
+
+function effectStatements(effects: Effect[], inLabel: string, id: string, px: number, ctx: GraphContext, timing: LayerTiming): { stmts: string[]; out: string } {
   const stmts: string[] = [];
   let cur = inLabel;
   let chain: string[] = [];
@@ -207,6 +220,21 @@ function effectStatements(effects: Effect[], inLabel: string, id: string, px: nu
         cur = out;
         break;
       }
+      case "glitch": {
+        // Per-frame red/blue split driven by sendcmd (same schedule as the jitter curve).
+        const name = `rgbashift@${id}gl${n}`;
+        const lines: string[] = [];
+        let prev = Number.NaN;
+        for (let j = 0; j < timing.frames; j++) {
+          const sh = Math.round(glitchAt(p, timing.clipOffset + j).shift * timing.width);
+          if (sh !== prev) lines.push(`${n6(j / timing.fps)} ${name} rh ${sh}, ${name} bh ${-sh};`);
+          prev = sh;
+        }
+        const file = `${id}gl${n}.cmd`;
+        ctx.writeFile(file, lines.join("\n"));
+        chain.push("format=gbrp", `sendcmd=f=${file}`, `${name}=rh=0:bh=0`);
+        break;
+      }
       case "chromaticAberration": {
         const s = Math.round(num("pixels") * px);
         if (s > 0) chain.push("format=gbrp", `rgbashift=rh=${-s}:bh=${s}`);
@@ -232,6 +260,19 @@ function effectStatements(effects: Effect[], inLabel: string, id: string, px: nu
   flush();
   return { stmts, out: cur };
 }
+
+/** FFmpeg `blend` modes for clip blend modes ("normal" uses plain overlay). */
+const BLEND_FILTER_MODES: Record<BlendMode, string | undefined> = {
+  normal: undefined,
+  screen: "screen",
+  add: "addition",
+  multiply: "multiply",
+  overlay: "overlay",
+  softLight: "softlight",
+  lighten: "lighten",
+  darken: "darken",
+  difference: "difference",
+};
 
 // ------------------------------------------------------------------ speed ramps
 
@@ -412,17 +453,18 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
 
     // --- effects (alpha-preserving wrapper for layers with transparency)
     // Motion effects are curves (applied below), not filters.
-    const active = clip.effects.filter((e) => e.enabled && !MOTION_EFFECTS.has(e.type));
+    const active = clip.effects.filter((e) => e.enabled && !MOTION_EFFECTS.has(e.type) && !FRAME_EFFECTS.has(e.type));
+    const timing: LayerTiming = { clipOffset: layer.clipOffset, frames: layer.frames, fps, width: W };
     if (active.length) {
       if (hasAlpha) {
         stmts.push(`[${cur}]format=rgba,split=2[${id}c][${id}a]`);
         stmts.push(`[${id}a]alphaextract[${id}am]`);
-        const fx = effectStatements(active, `${id}c`, id, px, ctx);
+        const fx = effectStatements(active, `${id}c`, id, px, ctx, timing);
         stmts.push(...fx.stmts);
         stmts.push(`[${fx.out}]format=gbrp[${id}cf]`, `[${id}cf][${id}am]alphamerge[${id}fx]`);
         cur = `${id}fx`;
       } else {
-        const fx = effectStatements(active, cur, id, px, ctx);
+        const fx = effectStatements(active, cur, id, px, ctx, timing);
         stmts.push(...fx.stmts);
         cur = fx.out;
       }
@@ -487,8 +529,37 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     const xRest = sumExpr(curves.x.slice(1), To, fps, 1);
     const yRest = sumExpr(curves.y.slice(1), To, fps, 1);
     const next = `base${k + 1}`;
-    stmts.push(`[${base}][${id}]overlay=x='(W-w)/2+${xKf}+${xRest}':y='(H-h)/2+${yKf}+${yRest}':eval=frame:eof_action=pass:format=rgb[${next}]`);
+    const pos = `x='(W-w)/2+${xKf}+${xRest}':y='(H-h)/2+${yKf}+${yRest}':eval=frame:eof_action=pass`;
+    const mode = BLEND_FILTER_MODES[clip.blendMode];
+    if (!mode) {
+      stmts.push(`[${base}][${id}]overlay=${pos}:format=rgb[${next}]`);
+    } else {
+      // Blend: place the layer on a transparent full frame, blend its colour with
+      // the base, then lay the blended pixels over the base through the layer's
+      // alpha (so transparent areas and opacity leave the base untouched).
+      stmts.push(`color=c=black@0:s=${W}x${H}:r=${fpsR}:d=${n6(durationSec + 1)},format=rgba[${id}cv]`);
+      stmts.push(`[${id}cv][${id}]overlay=${pos}:format=auto,split=2[${id}lc][${id}la]`);
+      stmts.push(`[${id}la]alphaextract[${id}am]`);
+      stmts.push(`[${id}lc]format=gbrp[${id}lrgb]`);
+      stmts.push(`[${base}]split=2[${id}b0][${id}b1]`);
+      // FFmpeg's first input is "top"; Photoshop-style overlay/soft light key off the base, so the base goes first.
+      stmts.push(`[${id}b0][${id}lrgb]blend=all_mode=${mode}:shortest=1[${id}bl]`);
+      stmts.push(`[${id}bl][${id}am]alphamerge[${id}ba]`);
+      stmts.push(`[${id}b1][${id}ba]overlay=0:0:eof_action=pass:format=rgb[${next}]`);
+    }
     base = next;
+
+    // --- frame overlays (letterbox bars) while this layer is on screen
+    for (const fx of clip.effects) {
+      if (!fx.enabled || fx.type !== "letterbox") continue;
+      const bar = Math.round(letterboxBar(String(fx.params.ratio), W, H) * H);
+      if (bar <= 0) continue;
+      const on = `enable='between(t,${n6(shift - 0.5 / fps)},${n6(shift + (layer.frames - 0.5) / fps)})'`;
+      const col = `${hex(String(fx.params.color))}`;
+      const lb = `${id}lb${fx.id.replace(/\W/g, "")}`;
+      stmts.push(`[${base}]drawbox=x=0:y=0:w=iw:h=${bar}:color=${col}:t=fill:${on},drawbox=x=0:y=ih-${bar}:w=iw:h=${bar}:color=${col}:t=fill:${on}[${lb}]`);
+      base = lb;
+    }
   });
 
   // --- final video

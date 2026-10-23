@@ -60,7 +60,21 @@ function noise(seed: number, i: number, ch: number): number {
   return (h / 0xffffffff) * 2 - 1;
 }
 
-/** Curves added by motion effects (shake, beat pulse). */
+/**
+ * Glitch state at a clip-relative frame for a glitch effect's params. Bursts
+ * hold for 2 frames. jitter and shift are fractions of the frame width:
+ * jitter moves the layer, shift is the red/blue channel split.
+ */
+export function glitchAt(params: Record<string, unknown>, frame: number): { active: boolean; jitter: number; shift: number } {
+  const seed = Number(params.seed ?? 1);
+  const amount = Number(params.amount ?? 0.5);
+  const seg = Math.floor(frame / 2);
+  const active = amount > 0 && noise(seed, seg, 11) * 0.5 + 0.5 < Number(params.density ?? 0.3);
+  if (!active) return { active, jitter: 0, shift: 0 };
+  return { active, jitter: noise(seed, seg, 12) * amount * 0.04, shift: (0.3 + 0.7 * Math.abs(noise(seed, seg, 13))) * amount * 0.012 * Math.sign(noise(seed, seg, 14) || 1) };
+}
+
+/** Curves added by motion effects (shake, beat pulse) and the jitter of glitch. */
 function motionCurves(clip: Clip, c: LayerCurves, opts: LayerCurveOptions) {
   const dur = clip.duration;
   const fps = opts.fps ?? 30;
@@ -98,6 +112,16 @@ function motionCurves(clip: Clip, c: LayerCurves, opts: LayerCurveOptions) {
         pts.push(K(b, 1 + zoom, "easeOut"), K(end, 1 + zoom * (1 - Math.min(1, (end - b) / decay)), "hold"));
       });
       c.scale.push(pts);
+    } else if (fx.type === "glitch") {
+      // Stepped (hold) curve: a key only where the jitter changes.
+      const pts: Curve = [];
+      let prev = Number.NaN;
+      for (let f = 0; f <= dur; f += 2) {
+        const v = glitchAt(p, f).jitter * opts.width;
+        if (v !== prev) pts.push(K(f, v, "hold"));
+        prev = v;
+      }
+      if (pts.length > 1 || (pts[0] && pts[0].value !== 0)) c.x.push(pts);
     }
   }
 }

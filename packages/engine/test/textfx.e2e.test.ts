@@ -3,7 +3,7 @@ import { mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, describe, expect, it } from "vitest";
-import { TMP } from "./fixtures.js";
+import { makeFixtures, TMP } from "./fixtures.js";
 
 process.env.MANTAGLI_HOME = path.join(TMP, "home-textfx");
 const { Engine } = await import("../src/engine.js");
@@ -130,6 +130,95 @@ describe("wipe/iris transitions and typewriter text", () => {
       const st = evalLayer(layerCurves(clip, { width: b.W, height: b.H, hasOutgoing: false, fps: 30, markers: s.project.markers }), f);
       expect(Math.abs(b.cx - (b.W / 2 + st.x))).toBeLessThan(1.5);
       expect(Math.abs(b.cy - (b.H / 2 + st.y))).toBeLessThan(1.5);
+    }
+  });
+
+  it("blends layers with the base using the clip blend mode", async () => {
+    const dir = path.join(TMP, "blendfx");
+    await engine.closeProject();
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    await engine.createProject({ name: "BlendFX", format: "landscape", parentDir: dir });
+    const s = engine.requireSession();
+    const track = (n: string) => s.project.tracks.find((t) => t.name === n)!.id;
+    s.dispatch("clip.add", { trackId: track("V1"), clip: { type: "color", fill: "#804020", start: 0, duration: 10 } });
+    const top = s.dispatch("clip.add", { trackId: track("V2"), clip: { type: "color", fill: "#808080", start: 0, duration: 10 } });
+    s.dispatch("clip.update", { clipId: top.clipId, props: { transform: { scale: 0.5 } } });
+
+    const base = [0x80, 0x40, 0x20];
+    const near = (got: number[], want: number[]) => got.forEach((v, i) => expect(Math.abs(v - want[i]!), `${got} vs ${want}`).toBeLessThanOrEqual(3));
+    const sample = async () => {
+      const px = await pixels((await engine.renderStill(2, { scale: 0.25 })).path);
+      return { centre: [...px.at(px.w / 2, px.h / 2)], corner: [...px.at(3, 3)] };
+    };
+    const g = 0x80 / 255;
+    const cases: [string, (b: number) => number][] = [
+      ["screen", (b) => 255 - ((255 - b) * (255 - 0x80)) / 255],
+      ["multiply", (b) => b * g],
+      ["add", (b) => Math.min(255, b + 0x80)],
+    ];
+    for (const [mode, f] of cases) {
+      s.dispatch("clip.update", { clipId: top.clipId, props: { blendMode: mode as "screen", opacity: 1 } });
+      const r = await sample();
+      near(r.centre, base.map(f));
+      near(r.corner, base);
+    }
+    // Opacity mixes the blended result with the base.
+    s.dispatch("clip.update", { clipId: top.clipId, props: { blendMode: "multiply", opacity: 0.5 } });
+    near((await sample()).centre, base.map((b) => (b + b * g) / 2));
+  });
+
+  it("draws letterbox bars and glitch bursts", async () => {
+    const { evalLayer, glitchAt, layerCurves, letterboxBar } = await import("@mantagli/core");
+    const dir = path.join(TMP, "stylefx");
+    await engine.closeProject();
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    await engine.createProject({ name: "StyleFX", format: "landscape", parentDir: dir });
+    const s = engine.requireSession();
+    const v1 = s.project.tracks.find((t) => t.name === "V1")!.id;
+    const bg = s.dispatch("clip.add", { trackId: v1, clip: { type: "color", fill: "#3060c0", start: 0, duration: 20 } });
+
+    // Letterbox 2.39 on 16:9: bars of (1 - (16/9)/2.39)/2 of the height.
+    s.dispatch("effect.add", { clipId: bg.clipId, type: "letterbox", params: { ratio: "2.39" } });
+    let px = await pixels((await engine.renderStill(3, { scale: 0.25 })).path);
+    const bar = Math.round(letterboxBar("2.39", px.w, px.h) * px.h);
+    expect(bar).toBeGreaterThan(10);
+    expect(px.at(px.w / 2, bar - 2)).toEqual([0, 0, 0]);
+    expect(px.at(px.w / 2, px.h - bar + 1)).toEqual([0, 0, 0]);
+    expect(px.at(px.w / 2, bar + 2)[2]).toBeGreaterThan(150);
+
+    // Glitch (always bursting) on a detailed image: compared with the clean frame,
+    // green moves by the jitter and red by jitter + split, as the core predicts.
+    const media = await makeFixtures();
+    const img = (await engine.importMedia([media.image])).imported[0]!;
+    const v2 = s.project.tracks.find((t) => t.name === "V2")!.id;
+    const im = s.dispatch("clip.add", { trackId: v2, clip: { type: "media", assetId: img.id, start: 0, duration: 20 } });
+    s.dispatch("clip.update", { clipId: im.clipId, props: { transform: { fit: "stretch" } } });
+    const clean = await pixels((await engine.renderStill(4, { scale: 0.25 })).path);
+    s.dispatch("effect.add", { clipId: im.clipId, type: "glitch", params: { amount: 1, density: 1, seed: 3 } });
+    const clip = s.project.tracks.find((t) => t.id === v2)!.clips[0]!;
+    const fx = clip.effects[0]!;
+    /** Horizontal offset (px) that best maps channel ch of the clean frame onto the glitched one. */
+    const bestOffset = (g: typeof clean, ch: number) => {
+      let best = 0;
+      let bestErr = Infinity;
+      for (let d = -30; d <= 30; d++) {
+        let err = 0;
+        for (let y = 20; y < g.h - 20; y += 4) for (let x = 40; x < g.w - 40; x += 2) err += Math.abs(g.at(x, y)[ch]! - clean.at(x - d, y)[ch]!);
+        if (err < bestErr) [best, bestErr] = [d, err];
+      }
+      return best;
+    };
+    for (const f of [4, 9]) {
+      px = await pixels((await engine.renderStill(f, { scale: 0.25 })).path);
+      const st = evalLayer(layerCurves(clip, { width: px.w, height: px.h, hasOutgoing: false, fps: 30 }), f);
+      const split = Math.round(glitchAt(fx.params, f).shift * px.w);
+      expect(split, `frame ${f} has a split`).not.toBe(0);
+      const green = bestOffset(px, 1);
+      const red = bestOffset(px, 0);
+      expect(Math.abs(green - st.x), `frame ${f} jitter`).toBeLessThanOrEqual(1);
+      expect(Math.abs(red - green - split), `frame ${f} split`).toBeLessThanOrEqual(1);
     }
   });
 });

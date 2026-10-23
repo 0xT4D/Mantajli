@@ -46,14 +46,14 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 
 ## M6 Cinematic workflows
 - [x] Beat/downbeat/onset detection → markers, snapping to markers
-- [x] Looks (6), 15 effects, 13 transitions, text animations (fade/slide/pop/typewriter)
+- [x] Looks (6), 17 effects, 13 transitions, text animations (fade/slide/pop/typewriter)
 - [x] Typewriter text (in/out), wipe left/right/up/down + iris transitions (textfx.e2e, pixel checks)
 - [x] Motion effects as curves: camera shake (seeded), beat pulse on beat/downbeat markers (animation.test + textfx.e2e)
 
 ## M9 Montage power features (session 2 roadmap)
-- [ ] Speed ramps (keyframed clip speed / velocity edits)
-- [ ] Layer blend modes (screen, add, multiply, overlay, lighten)
-- [ ] Letterbox bars and glitch effects
+- [x] Speed ramps: speed keyframes, 5 presets, frame-exact export (speedramp.test + speedramp.e2e); ramped clip audio muted
+- [x] Layer blend modes: screen, add, multiply, overlay, soft light, lighten, darken, difference (pixel-checked)
+- [x] Letterbox bars and digital glitch (jitter + RGB split, exact in export, channel-split live)
 - [ ] Cycles GPU quality presets in the UI
 - [ ] Audio: ducking music under dialogue/SFX, loudness-normalized export
 - [ ] Persist undo history and job history across sessions

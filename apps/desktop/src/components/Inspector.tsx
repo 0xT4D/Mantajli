@@ -11,6 +11,7 @@ import {
   MESH_PRIMITIVES,
   TEXT_ANIMATIONS,
   TRANSITIONS,
+  BLEND_MODES,
   type Clip,
   type CommandName,
   type KeyframeProperty,
@@ -79,6 +80,18 @@ function findClip(p: Project, id: string): { clip: Clip; track: Track } | undefi
     if (clip) return { clip, track };
   }
 }
+
+const BLEND_LABELS: Record<(typeof BLEND_MODES)[number], string> = {
+  normal: "Normal",
+  screen: "Screen",
+  add: "Add (linear dodge)",
+  multiply: "Multiply",
+  overlay: "Overlay",
+  softLight: "Soft light",
+  lighten: "Lighten",
+  darken: "Darken",
+  difference: "Difference",
+};
 
 function useCmd() {
   const dispatch = useStudio((s) => s.dispatch);
@@ -219,6 +232,9 @@ function ClipInspector({ project, clip, track }: { project: Project; clip: Clip;
           <Row label="Opacity">
             <Slider value={a.value("opacity")} min={0} max={1} step={0.01} onChange={(v) => a.set("opacity", v)} />
             <KeyButton clip={clip} prop="opacity" />
+          </Row>
+          <Row label="Blend" title="How this layer combines with the layers below (screen/add for light leaks and flares, multiply for textures)">
+            <Select value={clip.blendMode} onChange={(v) => upd({ blendMode: v }, "Blend mode")} options={BLEND_MODES.map((m) => ({ value: m, label: BLEND_LABELS[m] }))} />
           </Row>
           {clip.type === "media" && (
             <>

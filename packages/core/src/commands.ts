@@ -23,6 +23,7 @@ import {
   TRACK_KINDS,
   TextStyleSchema,
   TransformSchema,
+  BLEND_MODES,
   type Clip,
   type Project,
   type Track,
@@ -542,12 +543,13 @@ export const COMMANDS = {
   }),
 
   "clip.update": def({
-    description: "Change clip properties: name, opacity, transform, fades, speed, volume, text and style.",
+    description: "Change clip properties: name, opacity, blendMode, transform, fades, speed, volume, text and style.",
     params: z.object({
       clipId: IdSchema,
       props: z.object({
         name: z.string().max(200).optional(),
         opacity: z.number().min(0).max(1).optional(),
+        blendMode: z.enum(BLEND_MODES).optional(),
         transform: patchSchema(TransformSchema, { deep: true }).optional(),
         fadeIn: z.number().int().nonnegative().optional(),
         fadeOut: z.number().int().nonnegative().optional(),
@@ -568,6 +570,7 @@ export const COMMANDS = {
       const reject = (k: string): never => fail("invalid_params", `Property "${k}" does not apply to ${clip.type} clips`);
       if (props.name !== undefined) clip.name = props.name;
       if (props.opacity !== undefined) clip.opacity = props.opacity;
+      if (props.blendMode !== undefined) clip.blendMode = props.blendMode;
       if (props.transform) {
         const { crop, ...rest } = props.transform;
         Object.assign(clip.transform, rest);

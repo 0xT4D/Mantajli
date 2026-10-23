@@ -3,6 +3,8 @@ import {
   evalLayer,
   findAsset,
   fpsValue,
+  glitchAt,
+  letterboxBar,
   layerCurves,
   MASK_FEATHER,
   revealLines,
@@ -10,6 +12,7 @@ import {
   textReveal,
   transitionMask,
   type Asset,
+  type BlendMode,
   type Clip,
   type Project,
   type VisualLayer,
@@ -105,6 +108,7 @@ export class LiveCompositor {
       const y = kx.y * k + (st.y - kx.y);
       if (st.opacity <= 0.001) {
         if (clip.type === "media") activeVideo.add(clip.id);
+        drawFrameOverlays(ctx, clip, W, H);
         continue;
       }
       let src: CanvasImageSource | undefined;
@@ -132,12 +136,20 @@ export class LiveCompositor {
         } else sceneMissing = true;
         if (!src) {
           drawPlaceholder(ctx, W, H, `3D: ${project.scenes.find((s) => s.id === clip.sceneId)?.name ?? "scene"} — render preview to see it`, st.opacity);
+          drawFrameOverlays(ctx, clip, W, H);
           continue;
         }
       }
 
+      // Glitch bursts split R/B channels: draw the layer offscreen, then recombine.
+      const split = Math.round(glitchShift(clip, clipFrame) * W);
+      const out = ctx;
+      if (split) ctx = this.scratch(0, W, H);
       ctx.save();
-      ctx.globalAlpha = st.opacity;
+      if (!split) {
+        ctx.globalAlpha = st.opacity;
+        ctx.globalCompositeOperation = COMPOSITE_OPS[clip.blendMode];
+      }
       ctx.filter = cssFilter(clip, k);
       ctx.translate(W / 2 + x, H / 2 + y);
       if (st.rotation) ctx.rotate((st.rotation * Math.PI) / 180);
@@ -172,6 +184,16 @@ export class LiveCompositor {
         ctx.drawImage(src, cx0, cy0, cw, ch, -dw / 2, -dh / 2, dw, dh);
       }
       ctx.restore();
+      if (split) {
+        ctx = out;
+        const merged = this.channelSplit(W, H, split);
+        ctx.save();
+        ctx.globalAlpha = st.opacity;
+        ctx.globalCompositeOperation = COMPOSITE_OPS[clip.blendMode];
+        ctx.drawImage(merged, 0, 0);
+        ctx.restore();
+      }
+      drawFrameOverlays(ctx, clip, W, H);
     }
 
     // Pause videos that are no longer on screen.
@@ -179,6 +201,45 @@ export class LiveCompositor {
     this.syncAudio(project, plan.audio, frame, playing);
     this.playing = playing;
     return { sceneMissing };
+  }
+
+  private scratchCanvases: HTMLCanvasElement[] = [];
+
+  /** Cleared offscreen canvas #i of size W×H (reused between frames). */
+  private scratch(i: number, W: number, H: number): CanvasRenderingContext2D {
+    let c = this.scratchCanvases[i];
+    if (!c) this.scratchCanvases[i] = c = document.createElement("canvas");
+    if (c.width !== W || c.height !== H) [c.width, c.height] = [W, H];
+    const g = c.getContext("2d")!;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = "source-over";
+    g.filter = "none";
+    g.clearRect(0, 0, W, H);
+    return g;
+  }
+
+  /**
+   * Recombine scratch canvas 0 with red moved by +shift and blue by -shift px
+   * (the export's rgbashift rh=shift, bh=-shift): each channel is isolated by
+   * multiplying with a pure colour and re-masked with the layer's alpha, then
+   * the three are added.
+   */
+  private channelSplit(W: number, H: number, shift: number): HTMLCanvasElement {
+    const layer = this.scratchCanvases[0]!;
+    const merged = this.scratch(1, W, H);
+    merged.globalCompositeOperation = "lighter";
+    for (const [color, dx] of [["#ff0000", shift], ["#00ff00", 0], ["#0000ff", -shift]] as const) {
+      const ch = this.scratch(2, W, H);
+      ch.drawImage(layer, 0, 0);
+      ch.globalCompositeOperation = "multiply";
+      ch.fillStyle = color;
+      ch.fillRect(0, 0, W, H);
+      ch.globalCompositeOperation = "destination-in";
+      ch.drawImage(layer, 0, 0);
+      merged.drawImage(this.scratchCanvases[2]!, dx, 0);
+    }
+    return this.scratchCanvases[1]!;
   }
 
   private syncMedia(el: MediaEl, layer: { sourceStart: number; speed: number }, playing: boolean) {
@@ -241,11 +302,43 @@ export class LiveCompositor {
   }
 }
 
+/** Canvas equivalents of the export’s blend modes. */
+const COMPOSITE_OPS: Record<BlendMode, GlobalCompositeOperation> = {
+  normal: "source-over",
+  screen: "screen",
+  add: "lighter",
+  multiply: "multiply",
+  overlay: "overlay",
+  softLight: "soft-light",
+  lighten: "lighten",
+  darken: "darken",
+  difference: "difference",
+};
+
 function hasFlip(clip: Clip, dir: "horizontal" | "vertical"): boolean {
   return clip.effects.some((e) => e.enabled && e.type === "flip" && e.params[dir]);
 }
 
 /** Canvas-filter approximation of the clip's colour/blur effects. */
+/** Letterbox bars in canvas coordinates (same bar height as the export). */
+function drawFrameOverlays(ctx: CanvasRenderingContext2D, clip: Clip, W: number, H: number) {
+  for (const fx of clip.effects) {
+    if (!fx.enabled || fx.type !== "letterbox") continue;
+    const bar = Math.round(letterboxBar(String(fx.params.ratio), W, H) * H);
+    if (bar <= 0) continue;
+    ctx.save();
+    ctx.fillStyle = String(fx.params.color);
+    ctx.fillRect(0, 0, W, bar);
+    ctx.fillRect(0, H - bar, W, bar);
+    ctx.restore();
+  }
+}
+
+/** Total red/blue split of the clip's active glitch effects at a frame (fraction of width). */
+function glitchShift(clip: Clip, frame: number): number {
+  return clip.effects.reduce((s, e) => s + (e.enabled && e.type === "glitch" ? glitchAt(e.params, frame).shift : 0), 0);
+}
+
 function cssFilter(clip: Clip, k: number): string {
   const parts: string[] = [];
   for (const e of clip.effects) {

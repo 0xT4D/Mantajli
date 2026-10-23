@@ -23,6 +23,15 @@ export interface EffectSpec {
 
 /** Motion effects add animation curves (core/animation.ts) instead of filters. */
 export const MOTION_EFFECTS = new Set(["shake", "beatPulse"]);
+/** Frame overlays drawn on the composite after the layer (not in the layer's filter chain). */
+export const FRAME_EFFECTS = new Set(["letterbox"]);
+
+/** Height of each letterbox bar as a fraction of the frame height (0 when the frame is already wider). */
+export function letterboxBar(ratio: string, width: number, height: number): number {
+  const r = Number(ratio);
+  if (!(r > 0)) return 0;
+  return Math.max(0, (1 - width / r / height) / 2);
+}
 
 export const EFFECTS: EffectSpec[] = [
   {
@@ -151,6 +160,27 @@ export const EFFECTS: EffectSpec[] = [
     params: [
       { key: "horizontal", label: "Horizontal", kind: "bool", default: true },
       { key: "vertical", label: "Vertical", kind: "bool", default: false },
+    ],
+  },
+  {
+    type: "letterbox",
+    label: "Letterbox (Cinematic Bars)",
+    category: "stylize",
+    description: "Black (or coloured) bars that crop the frame to a wide aspect ratio while this clip is on screen. Covers this layer and everything below it.",
+    params: [
+      { key: "ratio", label: "Aspect", kind: "enum", options: ["2.39", "2.35", "2.0", "1.85", "1.0"], default: "2.39" },
+      { key: "color", label: "Colour", kind: "color", default: "#000000" },
+    ],
+  },
+  {
+    type: "glitch",
+    label: "Digital Glitch",
+    category: "stylize",
+    description: "Random bursts of RGB split and horizontal jitter (deterministic per seed).",
+    params: [
+      { key: "amount", label: "Amount", kind: "number", min: 0, max: 1, step: 0.01, default: 0.5 },
+      { key: "density", label: "Density", kind: "number", min: 0, max: 1, step: 0.01, default: 0.3 },
+      { key: "seed", label: "Seed", kind: "number", min: 0, max: 999, step: 1, default: 1 },
     ],
   },
   {

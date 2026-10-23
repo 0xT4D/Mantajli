@@ -304,7 +304,7 @@ export async function importOtio(engine: Engine, file: string, source: "user" | 
           try {
             // Carry Mantagli-only attributes (effects, keyframes, fades, transform, opacity).
             if (mClip) {
-              const props: Record<string, unknown> = { opacity: mClip.opacity, transform: mClip.transform, fadeIn: mClip.fadeIn, fadeOut: mClip.fadeOut };
+              const props: Record<string, unknown> = { opacity: mClip.opacity, blendMode: mClip.blendMode, transform: mClip.transform, fadeIn: mClip.fadeIn, fadeOut: mClip.fadeOut };
               if (mClip.type === "media") Object.assign(props, { volumeDb: mClip.volumeDb, audioEnabled: mClip.audioEnabled });
               tx.dispatch("clip.update", { clipId, props: props as never });
               for (const fx of mClip.effects) tx.dispatch("effect.add", { clipId, type: fx.type, params: fx.params });
