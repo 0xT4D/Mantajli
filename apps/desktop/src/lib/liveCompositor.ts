@@ -7,6 +7,7 @@ import {
   fpsValue,
   glitchAt,
   letterboxBar,
+  maskGeometry,
   layerCurves,
   MASK_FEATHER,
   revealLines,
@@ -144,12 +145,14 @@ export class LiveCompositor {
         }
       }
 
-      // Glitch bursts split R/B channels: draw the layer offscreen, then recombine.
+      // Glitch bursts (R/B split) and shape masks need the layer drawn offscreen first.
       const split = Math.round(glitchShift(clip, clipFrame) * W);
+      const masks = clip.effects.filter((e) => e.enabled && e.type === "mask");
+      const offscreen = split !== 0 || masks.length > 0;
       const out = ctx;
-      if (split) ctx = this.scratch(0, W, H);
+      if (offscreen) ctx = this.scratch(0, W, H);
       ctx.save();
-      if (!split) {
+      if (!offscreen) {
         ctx.globalAlpha = st.opacity;
         ctx.globalCompositeOperation = COMPOSITE_OPS[clip.blendMode];
       }
@@ -195,13 +198,14 @@ export class LiveCompositor {
         else ctx.drawImage(src, cx0, cy0, cw, ch, -dw / 2, -dh / 2, dw, dh);
       }
       ctx.restore();
-      if (split) {
+      if (offscreen) {
         ctx = out;
-        const merged = this.channelSplit(W, H, split);
+        const layerCanvas = split ? this.channelSplit(W, H, split) : this.scratchCanvases[0]!;
+        if (masks.length) applyMasks(layerCanvas, masks, W, H);
         ctx.save();
         ctx.globalAlpha = st.opacity;
         ctx.globalCompositeOperation = COMPOSITE_OPS[clip.blendMode];
-        ctx.drawImage(merged, 0, 0);
+        ctx.drawImage(layerCanvas, 0, 0);
         ctx.restore();
       }
       drawFrameOverlays(ctx, clip, W, H);
@@ -358,6 +362,25 @@ function hasFlip(clip: Clip, dir: "horizontal" | "vertical"): boolean {
 }
 
 /** Canvas-filter approximation of the clip's colour/blur effects. */
+/** Cut a layer canvas to its shape masks (frame coordinates); the blur approximates the export's feather. */
+function applyMasks(canvas: HTMLCanvasElement, masks: { params: Record<string, unknown> }[], W: number, H: number) {
+  const g = canvas.getContext("2d")!;
+  for (const m of masks) {
+    const geo = maskGeometry(m.params, W, H);
+    g.save();
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalAlpha = 1;
+    g.globalCompositeOperation = geo.invert ? "destination-out" : "destination-in";
+    g.filter = geo.feather > 1 ? `blur(${(geo.feather / 2.5).toFixed(1)}px)` : "none";
+    g.fillStyle = "#000";
+    g.beginPath();
+    if (geo.ellipse) g.ellipse(geo.cx, geo.cy, geo.hw, geo.hh, 0, 0, Math.PI * 2);
+    else g.rect(geo.cx - geo.hw, geo.cy - geo.hh, geo.hw * 2, geo.hh * 2);
+    g.fill();
+    g.restore();
+  }
+}
+
 /** Letterbox bars in canvas coordinates (same bar height as the export). */
 function drawFrameOverlays(ctx: CanvasRenderingContext2D, clip: Clip, W: number, H: number) {
   for (const fx of clip.effects) {

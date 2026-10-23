@@ -1,4 +1,5 @@
 import type { Clip, Easing, KeyframeProperty, TextClip } from "./schema.js";
+import { REVEAL_ANIMATIONS } from "./effects.js";
 import { ease } from "./timeline.js";
 
 /**
@@ -173,7 +174,7 @@ export function layerCurves(clip: Clip, opts: LayerCurveOptions): LayerCurves {
   if (clip.type === "text") {
     const ad = Math.min(clip.animation.duration, Math.floor(dur / 2));
     const a = clip.animation;
-    if (ad > 0 && a.in !== "none" && a.in !== "typewriter") {
+    if (ad > 0 && a.in !== "none" && !REVEAL_ANIMATIONS.has(a.in)) {
       c.opacity.push([K(0, 0, "easeOut"), K(ad, 1)]);
       if (a.in === "slideUp") c.y.push([K(0, H * 0.06, "easeOut"), K(ad, 0)]);
       if (a.in === "slideDown") c.y.push([K(0, -H * 0.06, "easeOut"), K(ad, 0)]);
@@ -181,7 +182,7 @@ export function layerCurves(clip: Clip, opts: LayerCurveOptions): LayerCurves {
       if (a.in === "slideRight") c.x.push([K(0, -W * 0.08, "easeOut"), K(ad, 0)]);
       if (a.in === "pop") c.scale.push([K(0, 0.6, "easeOut"), K(ad, 1)]);
     }
-    if (ad > 0 && a.out !== "none" && a.out !== "typewriter") {
+    if (ad > 0 && a.out !== "none" && !REVEAL_ANIMATIONS.has(a.out)) {
       c.opacity.push([K(dur - ad, 1, "easeIn"), K(dur, 0)]);
       if (a.out === "slideUp") c.y.push([K(dur - ad, 0, "easeIn"), K(dur, -H * 0.06)]);
       if (a.out === "slideDown") c.y.push([K(dur - ad, 0, "easeIn"), K(dur, H * 0.06)]);
@@ -200,19 +201,41 @@ export function textCharCount(clip: TextClip): number {
 }
 
 /**
- * Typewriter reveal: how many characters (newlines excluded, code points) are
- * visible at a clip-relative frame. Returns the full count when the clip has
- * no typewriter animation. "in" types over the animation duration; "out"
- * deletes characters over the last animation-duration frames.
+ * Progressive reveal: how many characters (newlines excluded, code points)
+ * are visible at a clip-relative frame. "typewriter" steps per character,
+ * "words" per word (kinetic captions). "in" reveals over the animation
+ * duration, "out" removes over the last animation-duration frames. Returns the
+ * full count when neither end uses a reveal animation.
  */
 export function textReveal(clip: TextClip, frame: number): number {
   const total = textCharCount(clip);
   const dur = clip.duration;
   const ad = Math.min(clip.animation.duration, Math.floor(dur / 2));
   if (ad <= 0 || total === 0) return total;
+  // Reveal units: every character, or the character count at the end of each word.
+  const units = (kind: string): number[] => {
+    if (kind === "typewriter") return Array.from({ length: total }, (_, i) => i + 1);
+    const ends: number[] = [];
+    let offset = 0;
+    for (const line of clip.text.split(/\r?\n/)) {
+      const chars = Array.from(line);
+      chars.forEach((ch, i) => {
+        if (!/\s/.test(ch) && (i === chars.length - 1 || /\s/.test(chars[i + 1]!))) ends.push(offset + i + 1);
+      });
+      offset += chars.length;
+    }
+    return ends.length ? ends : [total];
+  };
+  const shown = (u: number[], k: number) => (k <= 0 ? 0 : u[Math.min(k, u.length) - 1]!);
   let n = total;
-  if (clip.animation.in === "typewriter" && frame < ad) n = Math.min(n, Math.floor((total * (frame + 1)) / ad));
-  if (clip.animation.out === "typewriter" && frame >= dur - ad) n = Math.min(n, total - Math.floor((total * (frame - (dur - ad) + 1)) / ad));
+  if (REVEAL_ANIMATIONS.has(clip.animation.in) && frame < ad) {
+    const u = units(clip.animation.in);
+    n = Math.min(n, shown(u, Math.floor((u.length * (frame + 1)) / ad)));
+  }
+  if (REVEAL_ANIMATIONS.has(clip.animation.out) && frame >= dur - ad) {
+    const u = units(clip.animation.out);
+    n = Math.min(n, shown(u, u.length - Math.floor((u.length * (frame - (dur - ad) + 1)) / ad)));
+  }
   return Math.max(0, n);
 }
 

@@ -354,7 +354,7 @@ function CaptionsSection() {
     <div className="space-y-1.5 border-t border-line pt-2">
       <div className="text-[11px] font-semibold text-dim">Captions (.srt / .vtt)</div>
       <Row label="Style">
-        <Select value={style} onChange={setStyle} options={[{ value: "bold", label: "Bold (stroked, pop)" }, { value: "boxed", label: "Boxed" }, { value: "clean", label: "Clean" }, { value: "karaoke", label: "Karaoke yellow" }]} />
+        <Select value={style} onChange={setStyle} options={[{ value: "bold", label: "Bold (stroked, pop)" }, { value: "boxed", label: "Boxed" }, { value: "clean", label: "Clean" }, { value: "karaoke", label: "Karaoke yellow" }, { value: "kinetic", label: "Kinetic (word by word)" }]} />
         <Select value={position} onChange={setPosition} options={[{ value: "bottom", label: "Bottom" }, { value: "middle", label: "Middle" }, { value: "top", label: "Top" }]} />
       </Row>
       <div className="flex flex-wrap gap-2">

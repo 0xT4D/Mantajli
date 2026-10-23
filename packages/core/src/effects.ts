@@ -24,7 +24,7 @@ export interface EffectSpec {
 /** Motion effects add animation curves (core/animation.ts) instead of filters. */
 export const MOTION_EFFECTS = new Set(["shake", "beatPulse"]);
 /** Frame overlays drawn on the composite after the layer (not in the layer's filter chain). */
-export const FRAME_EFFECTS = new Set(["letterbox"]);
+export const FRAME_EFFECTS = new Set(["letterbox", "mask"]);
 
 /** Height of each letterbox bar as a fraction of the frame height (0 when the frame is already wider). */
 export function letterboxBar(ratio: string, width: number, height: number): number {
@@ -175,6 +175,21 @@ export const EFFECTS: EffectSpec[] = [
     ],
   },
   {
+    type: "mask",
+    label: "Shape Mask",
+    category: "transform",
+    description: "Show the layer only inside (or outside, inverted) a feathered rectangle or ellipse placed in frame coordinates. Stack masks to intersect. Great for split screens and spotlight reveals.",
+    params: [
+      { key: "shape", label: "Shape", kind: "enum", options: ["rectangle", "ellipse"], default: "rectangle" },
+      { key: "x", label: "Centre X", kind: "number", min: -0.5, max: 0.5, step: 0.01, default: 0 },
+      { key: "y", label: "Centre Y", kind: "number", min: -0.5, max: 0.5, step: 0.01, default: 0 },
+      { key: "width", label: "Width", kind: "number", min: 0.01, max: 1.5, step: 0.01, default: 0.5 },
+      { key: "height", label: "Height", kind: "number", min: 0.01, max: 1.5, step: 0.01, default: 0.5 },
+      { key: "feather", label: "Feather", kind: "number", min: 0, max: 0.3, step: 0.005, default: 0.02 },
+      { key: "invert", label: "Invert", kind: "bool", default: false },
+    ],
+  },
+  {
     type: "letterbox",
     label: "Letterbox (Cinematic Bars)",
     category: "stylize",
@@ -299,7 +314,9 @@ export const TRANSITION_TYPES = TRANSITIONS.map((t) => t.type);
 // ---------------------------------------------------------------------------
 // Text animations (curves in core/animation.ts; typewriter reveals characters, see textReveal).
 
-export const TEXT_ANIMATIONS = ["none", "fade", "slideUp", "slideDown", "slideLeft", "slideRight", "pop", "typewriter"] as const;
+export const TEXT_ANIMATIONS = ["none", "fade", "slideUp", "slideDown", "slideLeft", "slideRight", "pop", "typewriter", "words"] as const;
+/** Animations that reveal text progressively (characters or whole words) instead of fading. */
+export const REVEAL_ANIMATIONS: ReadonlySet<string> = new Set(["typewriter", "words"]);
 export type TextAnimation = (typeof TEXT_ANIMATIONS)[number];
 
 // ---------------------------------------------------------------------------
@@ -396,4 +413,40 @@ export function chromaKeyAlpha(r: number, g: number, b: number, key: [number, nu
   const diff = Math.sqrt(((u - ku) ** 2 + (v - kv) ** 2) / (255 * 255 * 2));
   if (diff <= similarity) return 0;
   return blend > 0.0001 ? Math.min(1, (diff - similarity) / blend) : 1;
+}
+
+/** Shape-mask parameters resolved to pixels for a W×H frame. */
+export interface MaskGeometry {
+  ellipse: boolean;
+  cx: number;
+  cy: number;
+  /** Half extents. */
+  hw: number;
+  hh: number;
+  /** Feather width in pixels (≥ 0.5 so edges stay anti-aliased). */
+  feather: number;
+  invert: boolean;
+}
+
+export function maskGeometry(params: Record<string, unknown>, W: number, H: number): MaskGeometry {
+  return {
+    ellipse: params.shape === "ellipse",
+    cx: W / 2 + Number(params.x) * W,
+    cy: H / 2 + Number(params.y) * H,
+    hw: (Number(params.width) * W) / 2,
+    hh: (Number(params.height) * H) / 2,
+    feather: Math.max(0.5, Number(params.feather) * Math.min(W, H)),
+    invert: !!params.invert,
+  };
+}
+
+/** Mask coverage (0–1) at pixel (x, y): soft-edged box or ellipse, optionally inverted. */
+export function maskAlpha(m: MaskGeometry, x: number, y: number): number {
+  const clip01 = (v: number) => Math.max(0, Math.min(1, v));
+  let a: number;
+  if (m.ellipse) {
+    const d = Math.hypot((x - m.cx) / m.hw, (y - m.cy) / m.hh);
+    a = clip01(((1 - d) * Math.min(m.hw, m.hh)) / m.feather + 0.5);
+  } else a = clip01((m.hw - Math.abs(x - m.cx)) / m.feather + 0.5) * clip01((m.hh - Math.abs(y - m.cy)) / m.feather + 0.5);
+  return m.invert ? 1 - a : a;
 }

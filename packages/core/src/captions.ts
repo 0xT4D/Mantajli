@@ -74,7 +74,7 @@ export function trackCues(p: Project, trackId: string): Cue[] {
     .map((c) => ({ start: c.start / fps, end: clipEnd(c) / fps, text: c.type === "text" ? c.text : "" }));
 }
 
-export const CAPTION_STYLES = ["clean", "bold", "boxed", "karaoke"] as const;
+export const CAPTION_STYLES = ["clean", "bold", "boxed", "karaoke", "kinetic"] as const;
 export type CaptionStyle = (typeof CAPTION_STYLES)[number];
 export type CaptionPosition = "bottom" | "middle" | "top";
 
@@ -84,7 +84,8 @@ export type CaptionPosition = "bottom" | "middle" | "top";
  */
 export function captionLook(style: CaptionStyle, position: CaptionPosition, width: number, height: number) {
   const vertical = height > width;
-  const size = Math.round(Math.min(width, height) * (style === "bold" || style === "karaoke" ? 0.075 : 0.06));
+  const big = style === "bold" || style === "karaoke" || style === "kinetic";
+  const size = Math.round(Math.min(width, height) * (big ? 0.075 : 0.06));
   const yOff = position === "middle" ? 0 : (position === "bottom" ? 1 : -1) * height * (vertical ? 0.2 : 0.36);
   const base: Partial<TextStyle> = { fontSize: size, align: "center", bold: true, color: "#ffffff", shadow: false, box: false, strokeWidth: 0 };
   const look: Partial<TextStyle> =
@@ -94,7 +95,12 @@ export function captionLook(style: CaptionStyle, position: CaptionPosition, widt
         ? { ...base, strokeWidth: Math.max(2, Math.round(size * 0.08)), strokeColor: "#000000" }
         : style === "boxed"
           ? { ...base, box: true, boxColor: "#000000", boxOpacity: 0.65 }
-          : { ...base, color: "#ffe14d", strokeWidth: Math.max(2, Math.round(size * 0.09)), strokeColor: "#000000" };
-  const animation = style === "bold" || style === "karaoke" ? { in: "pop" as const, out: "none" as const, duration: 4 } : { in: "fade" as const, out: "fade" as const, duration: 3 };
+          : { ...base, color: style === "karaoke" ? "#ffe14d" : "#ffffff", strokeWidth: Math.max(2, Math.round(size * 0.09)), strokeColor: "#000000" };
+  const animation =
+    style === "kinetic"
+      ? { in: "words" as const, out: "none" as const, duration: 24 }
+      : big
+        ? { in: "pop" as const, out: "none" as const, duration: 4 }
+        : { in: "fade" as const, out: "fade" as const, duration: 3 };
   return { style: look, y: Math.round(yOff), animation };
 }

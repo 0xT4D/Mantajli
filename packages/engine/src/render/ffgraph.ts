@@ -11,9 +11,11 @@ import {
   FRAME_EFFECTS,
   glitchAt,
   letterboxBar,
+  maskGeometry,
   sourceOffset,
   speedAt,
   revealLines,
+  REVEAL_ANIMATIONS,
   textReveal,
   transitionMask,
   type Asset,
@@ -413,7 +415,7 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
           return `drawtext=${opts.join(":")}`;
         };
         let draws: string[];
-        if (clip.animation.in === "typewriter" || clip.animation.out === "typewriter") {
+        if (REVEAL_ANIMATIONS.has(clip.animation.in) || REVEAL_ANIMATIONS.has(clip.animation.out)) {
           // Typewriter: one drawtext per (line, visible prefix), enabled for the
           // frames where that prefix shows (layer-local t, half-frame margins).
           draws = [];
@@ -561,21 +563,42 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     const next = `base${k + 1}`;
     const pos = `x='(W-w)/2+${xKf}+${xRest}':y='(H-h)/2+${yKf}+${yRest}':eval=frame:eof_action=pass`;
     const mode = BLEND_FILTER_MODES[clip.blendMode];
-    if (!mode) {
+    const masks = clip.effects.filter((e) => e.enabled && e.type === "mask");
+    if (!mode && !masks.length) {
       stmts.push(`[${base}][${id}]overlay=${pos}:format=rgb[${next}]`);
     } else {
-      // Blend: place the layer on a transparent full frame, blend its colour with
-      // the base, then lay the blended pixels over the base through the layer's
-      // alpha (so transparent areas and opacity leave the base untouched).
+      // Full-frame path: place the layer on a transparent frame, multiply its
+      // alpha by any shape masks (frame coordinates), blend its colour with the
+      // base when a blend mode is set, then lay the result over the base through
+      // that alpha (so transparent areas and opacity leave the base untouched).
       stmts.push(`color=c=black@0:s=${W}x${H}:r=${fpsR}:d=${n6(durationSec + 1)},format=rgba[${id}cv]`);
       stmts.push(`[${id}cv][${id}]overlay=${pos}:format=auto,split=2[${id}lc][${id}la]`);
-      stmts.push(`[${id}la]alphaextract[${id}am]`);
+      stmts.push(`[${id}la]alphaextract[${id}am0]`);
+      let am = `${id}am0`;
+      const loops = Math.ceil((durationSec + 1) * fps) + 1;
+      masks.forEach((m, j) => {
+        // The mask is computed once (single frame) and repeated.
+        const g = maskGeometry(m.params, W, H);
+        const c01 = (e: string) => `clip(${e},0,1)`;
+        const shape = g.ellipse
+          ? c01(`(1-hypot((X-${n6(g.cx)})/${n6(g.hw)},(Y-${n6(g.cy)})/${n6(g.hh)}))*${n6(Math.min(g.hw, g.hh) / g.feather)}+0.5`)
+          : `${c01(`(${n6(g.hw)}-abs(X-${n6(g.cx)}))/${n6(g.feather)}+0.5`)}*${c01(`(${n6(g.hh)}-abs(Y-${n6(g.cy)}))/${n6(g.feather)}+0.5`)}`;
+        const expr = g.invert ? `1-${shape}` : shape;
+        stmts.push(`color=c=black:s=${W}x${H}:r=${fpsR}:d=${n6(1 / fps)},format=gray,geq=lum='255*(${expr})',loop=loop=${loops}:size=1[${id}mk${j}]`);
+        stmts.push(`[${am}][${id}mk${j}]blend=all_mode=multiply:shortest=1[${id}am${j + 1}]`);
+        am = `${id}am${j + 1}`;
+      });
       stmts.push(`[${id}lc]format=gbrp[${id}lrgb]`);
-      stmts.push(`[${base}]split=2[${id}b0][${id}b1]`);
-      // FFmpeg's first input is "top"; Photoshop-style overlay/soft light key off the base, so the base goes first.
-      stmts.push(`[${id}b0][${id}lrgb]blend=all_mode=${mode}:shortest=1[${id}bl]`);
-      stmts.push(`[${id}bl][${id}am]alphamerge[${id}ba]`);
-      stmts.push(`[${id}b1][${id}ba]overlay=0:0:eof_action=pass:format=rgb[${next}]`);
+      if (mode) {
+        stmts.push(`[${base}]split=2[${id}b0][${id}b1]`);
+        // FFmpeg's first input is "top"; Photoshop-style overlay/soft light key off the base, so the base goes first.
+        stmts.push(`[${id}b0][${id}lrgb]blend=all_mode=${mode}:shortest=1[${id}bl]`);
+        stmts.push(`[${id}bl][${am}]alphamerge[${id}ba]`);
+        stmts.push(`[${id}b1][${id}ba]overlay=0:0:eof_action=pass:format=rgb[${next}]`);
+      } else {
+        stmts.push(`[${id}lrgb][${am}]alphamerge[${id}ba]`);
+        stmts.push(`[${base}][${id}ba]overlay=0:0:eof_action=pass:format=rgb[${next}]`);
+      }
     }
     base = next;
 

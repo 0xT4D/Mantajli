@@ -10,7 +10,7 @@ committed per feature on `main`.
 
 ## Start here
 1. `git log --oneline | head` and `git status`.
-2. `npm test` runs unit + e2e projects (≈150 s, 61 tests) — all should pass. `npm run typecheck`.
+2. `npm test` runs unit + e2e projects (≈160 s, 71 tests) — all should pass. `npm run typecheck`.
 3. Packaging (verified in session 1): `npm run build:engine`, then
    `source scripts/tauri-env.sh && cd apps/desktop && npx tauri build` (~15 min, LTO).
    Rebuild the installer to ship session-2 features; not yet tested on a clean machine.

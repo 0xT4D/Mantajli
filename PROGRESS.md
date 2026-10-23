@@ -34,8 +34,10 @@ _Last updated: 2026-10-23 (session 2)_
 | Auto edit to beats (timeline.autoEdit, dialog, AI tool) | `speedramp.test`; run from the UI on the MCP montage project |
 | Reverse clips (incl. audio) and freeze frames (ripple) | `speedramp.test` + `speedramp.e2e` (PSNR per frame, audio RMS) |
 | Chroma key with despill; live per-pixel key | `textfx.e2e` pixel checks; live vs exact screenshot |
+| Shape masks (frame coords, feather, invert); word-by-word text + kinetic captions | `animation.test` + `textfx.e2e` (feather ramp vs core formula); screenshots |
+| Release installer rebuilt with session-2 features up to chroma key | `npx tauri build` → `Mantagli_0.1.0_x64-setup.exe` 23.5 MiB (21:59) |
 
-Test totals: `npm test` (runs unit + e2e projects) → 71 tests in 18 files, all passing (≈160 s, RTX 4060).
+Test totals: `npm test` (runs unit + e2e projects) → 74 tests in 18 files, all passing (≈160 s, RTX 4060).
 `npm run typecheck` clean.
 
 ## Known gaps / limitations

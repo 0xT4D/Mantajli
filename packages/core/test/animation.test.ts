@@ -82,3 +82,34 @@ describe("music ducking", () => {
     expect(duckCurve([], d, 0)).toEqual([]);
   });
 });
+
+describe("shape masks", () => {
+  it("is 1 inside, 0.5 on the edge, 0 outside, and flips when inverted", async () => {
+    const { maskAlpha, maskGeometry } = await import("../src/index.js");
+    const rect = maskGeometry({ shape: "rectangle", x: 0, y: 0, width: 0.5, height: 0.5, feather: 0.1, invert: false }, 200, 100);
+    expect(maskAlpha(rect, 100, 50)).toBe(1);
+    expect(maskAlpha(rect, 150, 50)).toBeCloseTo(0.5); // right edge at x = 100 + 50
+    expect(maskAlpha(rect, 199, 50)).toBe(0);
+    const ell = maskGeometry({ shape: "ellipse", x: 0.25, y: 0, width: 0.2, height: 0.4, feather: 0, invert: true }, 200, 100);
+    expect(maskAlpha(ell, 150, 50)).toBe(0); // centre of the inverted ellipse
+    expect(maskAlpha(ell, 10, 10)).toBe(1);
+  });
+});
+
+describe("word-by-word captions", () => {
+  it("reveals whole words, across lines, and removes them at the end", () => {
+    const t = makeTextClip({ text: "WAIT FOR\nTHE DROP", start: 0, duration: 40, animation: { in: "words", out: "words", duration: 8 } });
+    // 4 words over 8 frames: one more word every 2 frames.
+    expect([0, 1, 2, 3, 5, 7, 20].map((f) => revealLines(t.text, textReveal(t, f)))).toEqual([
+      ["", ""],
+      ["WAIT", ""],
+      ["WAIT", ""],
+      ["WAIT FOR", ""],
+      ["WAIT FOR", "THE"],
+      ["WAIT FOR", "THE DROP"],
+      ["WAIT FOR", "THE DROP"],
+    ]);
+    expect(revealLines(t.text, textReveal(t, 39))).toEqual(["", ""]);
+    expect(evalLayer(layerCurves(t, opts), 0).opacity).toBe(1);
+  });
+});

@@ -196,6 +196,33 @@ describe("wipe/iris transitions and typewriter text", () => {
     expect(centre[0]).toBeGreaterThan(centre[2] + 30);
   });
 
+  it("cuts layers to feathered shape masks in frame coordinates", async () => {
+    const { maskAlpha, maskGeometry } = await import("@mantagli/core");
+    if (!engine.deps.ffmpeg) await engine.init();
+    const dir = path.join(TMP, "maskfx");
+    await engine.closeProject();
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    await engine.createProject({ name: "MaskFX", format: "landscape", parentDir: dir });
+    const s = engine.requireSession();
+    const track = (n: string) => s.project.tracks.find((t) => t.name === n)!.id;
+    s.dispatch("clip.add", { trackId: track("V1"), clip: { type: "color", fill: "#0000ff", start: 0, duration: 10 } });
+    const top = s.dispatch("clip.add", { trackId: track("V2"), clip: { type: "color", fill: "#ffffff", start: 0, duration: 10 } });
+    // Split screen: white only in the left half.
+    const fx = s.dispatch("effect.add", { clipId: top.clipId, type: "mask", params: { x: -0.25, width: 0.5, height: 1.2, feather: 0 } });
+    let px = await pixels((await engine.renderStill(2, { scale: 0.25 })).path);
+    expect(px.at(px.w * 0.25, px.h / 2)).toEqual([255, 255, 255]);
+    expect(px.at(px.w * 0.75, px.h / 2)).toEqual([0, 0, 255]);
+    // Feathered ellipse, inverted: compare the ramp with the core formula.
+    s.dispatch("effect.update", { clipId: top.clipId, effectId: fx.effectId, params: { shape: "ellipse", x: 0, width: 0.5, height: 0.5, feather: 0.05, invert: true } });
+    px = await pixels((await engine.renderStill(2, { scale: 0.25 })).path);
+    const geo = maskGeometry(s.project.tracks.find((t) => t.id === track("V2"))!.clips[0]!.effects[0]!.params, px.w, px.h);
+    for (const x of [px.w / 2, px.w / 2 + geo.hw - 3, px.w / 2 + geo.hw, px.w / 2 + geo.hw + 3, px.w - 5]) {
+      const want = maskAlpha(geo, x + 0.5, px.h / 2 + 0.5) * 255; // white over blue: red channel = mask alpha
+      expect(Math.abs(px.at(Math.floor(x), px.h / 2)[0] - want), `x=${x}`).toBeLessThanOrEqual(12);
+    }
+  });
+
   it("draws letterbox bars and glitch bursts", async () => {
     const { evalLayer, glitchAt, layerCurves, letterboxBar } = await import("@mantagli/core");
     const dir = path.join(TMP, "stylefx");
