@@ -16,6 +16,7 @@ import {
 } from "@mantagli/core";
 import { produce } from "immer";
 import { ensureDir, exists, safeName, writeFileAtomic } from "./util/fsx.js";
+import { HISTORY_FILE, projectTextHash, readHistory, SnapshotEncoder, writeHistory } from "./historyStore.js";
 
 export const PROJECT_FILE = "project.json";
 export const PROJECT_EXT = ".mantagli";
@@ -43,6 +44,7 @@ export interface Transaction {
  */
 export class ProjectSession extends EventEmitter {
   history = new History();
+  private historyEncoder = new SnapshotEncoder();
   saveState: SaveState = "saved";
   lastSaveError?: string;
   recoveredFrom?: string;
@@ -87,8 +89,10 @@ export class ProjectSession extends EventEmitter {
     let project: Project | undefined;
     let recoveredFrom: string | undefined;
     let primaryError: string | undefined;
+    let text: string | undefined;
     try {
-      project = migrateProject(JSON.parse(await readFile(file, "utf8"))).project;
+      text = await readFile(file, "utf8");
+      project = migrateProject(JSON.parse(text)).project;
     } catch (e) {
       primaryError = (e as Error).message;
       for (const b of await ProjectSession.listBackups(dir)) {
@@ -105,6 +109,11 @@ export class ProjectSession extends EventEmitter {
     const s = new ProjectSession(dir, project);
     s.recoveredFrom = recoveredFrom;
     await s.acquireLock(opts.force);
+    // Undo history from the previous session, if it belongs to exactly this file.
+    if (!recoveredFrom && text !== undefined) {
+      const h = await readHistory(path.join(dir, HISTORY_FILE), projectTextHash(text));
+      if (h) s.history.load(h.past, h.future);
+    }
     await s.refreshAssetStatus();
     if (recoveredFrom) {
       // Preserve the corrupt file for inspection, then write the recovered state.
@@ -251,6 +260,7 @@ export class ProjectSession extends EventEmitter {
       try {
         const json = JSON.stringify(snapshot, null, 1);
         await writeFileAtomic(this.file, json);
+        await this.saveHistory(json);
         const now = Date.now();
         if (opts.backup !== false && (opts.backup === true || now - this.lastBackupAt > BACKUP_MIN_INTERVAL_MS)) {
           await this.writeBackup(json);
@@ -267,6 +277,15 @@ export class ProjectSession extends EventEmitter {
     this.savePromise = run;
     await run;
     if (this.saveState === "error") fail("io_error", `Save failed: ${this.lastSaveError}`);
+  }
+
+  /** Persist undo history next to the project (best effort: a failure never fails the save). */
+  private async saveHistory(projectJson: string): Promise<void> {
+    try {
+      await writeHistory(path.join(this.dir, HISTORY_FILE), this.historyEncoder, projectTextHash(projectJson), this.history.entries());
+    } catch {
+      await rm(path.join(this.dir, HISTORY_FILE), { force: true }).catch(() => {});
+    }
   }
 
   private async writeBackup(json: string): Promise<void> {

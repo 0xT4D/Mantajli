@@ -26,7 +26,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Relink, auto-relink via project-relative path
 - [x] Atomic saves, autosave, rotating backups, corrupt-file recovery, lock file
 - [x] 3D models (OBJ verified in Blender turntable), fonts, LUTs imported as references; LUT effect verified (lut.e2e)
-- [ ] Undo history persisted across sessions (in memory only)
+- [x] Undo history persisted across sessions (see M9)
 
 ## M4 3D rendering
 - [x] Blender discovery + capability probe, JSON job protocol, resumable frame cache
@@ -56,7 +56,8 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Letterbox bars and digital glitch (jitter + RGB split, exact in export, channel-split live)
 - [x] 3D render quality presets (EEVEE fast/high, Cycles GPU preview/final/film) in UI + AI; Cycles device shown in status bar (cycles.e2e)
 - [x] Audio: clip-timed ducking of music under dialogue/SFX roles; loudness-normalised export (loudnorm, verified with ebur128)
-- [ ] Persist undo history and job history across sessions
+- [x] Undo/redo history persisted across sessions (content-addressed snapshots, history.json; discarded if project.json changed elsewhere)
+- [ ] Job history persisted across sessions (optional)
 
 ## M7 AI Director
 - [x] Shared tool layer (52 tools), MCP server (standalone + bridge to app)

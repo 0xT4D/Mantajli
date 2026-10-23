@@ -52,6 +52,17 @@ export class History {
     this.future = [];
   }
 
+  /** All entries, oldest first (future: next redo last), for persistence. */
+  entries(): { past: readonly HistoryEntry[]; future: readonly HistoryEntry[] } {
+    return { past: this.past, future: this.future };
+  }
+
+  /** Replace the stacks (restoring persisted history). */
+  load(past: HistoryEntry[], future: HistoryEntry[]): void {
+    this.past = past.slice(-this.limit);
+    this.future = future;
+  }
+
   /** Labels newest-first, for the history panel. */
   list(): { undo: { label: string; source: ChangeSource; at: string }[]; redo: { label: string; source: ChangeSource; at: string }[] } {
     const strip = (e: HistoryEntry) => ({ label: e.label, source: e.source, at: e.at });
