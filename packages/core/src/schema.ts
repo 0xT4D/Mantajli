@@ -410,11 +410,29 @@ export const ExportSettingsSchema = z.object({
   crf: z.number().int().min(0).max(51).default(18),
   encoderPreset: z.enum(["ultrafast", "veryfast", "fast", "medium", "slow"]).default("medium"),
   audioBitrateK: z.number().int().min(64).max(512).default(256),
+  /** Integrated loudness target of the export (EBU R128), or null to leave levels as mixed. */
+  loudnessLufs: z.number().min(-30).max(-8).nullable().default(null),
   /** Override output resolution (defaults to project settings). */
   width: z.number().int().optional(),
   height: z.number().int().optional(),
 });
 export type ExportSettings = z.infer<typeof ExportSettingsSchema>;
+
+/** Automatic mix: music tracks duck under dialogue (and optionally SFX) clips. */
+export const MixSettingsSchema = z.object({
+  ducking: z
+    .object({
+      enabled: z.boolean().default(false),
+      /** How far music drops, in dB (positive). */
+      amountDb: z.number().min(0).max(40).default(12),
+      attackFrames: z.number().int().min(0).max(120).default(6),
+      releaseFrames: z.number().int().min(0).max(240).default(15),
+      /** Track roles whose clips trigger ducking. */
+      triggers: z.array(z.enum(["dialogue", "sfx"])).min(1).default(["dialogue"]),
+    })
+    .default({ enabled: false, amountDb: 12, attackFrames: 6, releaseFrames: 15, triggers: ["dialogue"] }),
+});
+export type MixSettings = z.infer<typeof MixSettingsSchema>;
 
 export const PlanShotSchema = z.object({
   index: z.number().int(),
@@ -456,6 +474,7 @@ export const ProjectSchema = z.object({
   markers: z.array(MarkerSchema).default([]),
   scenes: z.array(SceneSchema).default([]),
   export: ExportSettingsSchema.default(ExportSettingsSchema.parse({})),
+  mix: MixSettingsSchema.default(MixSettingsSchema.parse({})),
   ai: z
     .object({
       plans: z.array(AiPlanSchema).default([]),

@@ -776,6 +776,40 @@ export const TOOLS: ToolDef[] = [
     },
   }),
   tool({
+    name: "audio_set_ducking",
+    description:
+      "Automatic music ducking: music-role tracks dip by amountDb while clips on dialogue-role (and optionally sfx-role) tracks play, with attack/release ramps in frames. Set track roles with timeline_update_track.",
+    input: z.object({
+      enabled: z.boolean().optional(),
+      amountDb: z.number().min(0).max(40).optional(),
+      attackFrames: z.number().int().min(0).max(120).optional(),
+      releaseFrames: z.number().int().min(0).max(240).optional(),
+      triggers: z.array(z.enum(["dialogue", "sfx"])).min(1).optional(),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      session(ctx).dispatch("project.setMix", { ducking: i }, ctx.source, label("ducking"));
+      return { data: session(ctx).project.mix };
+    },
+  }),
+  tool({
+    name: "export_set_settings",
+    description:
+      "Delivery settings used by export_render: codec (h264|h265|prores), crf (quality, lower = better), encoderPreset, audioBitrateK, loudnessLufs (e.g. -14 for social platforms, -23 broadcast, null = as mixed).",
+    input: z.object({
+      codec: z.enum(["h264", "h265", "prores"]).optional(),
+      crf: z.number().int().min(0).max(51).optional(),
+      encoderPreset: z.enum(["ultrafast", "veryfast", "fast", "medium", "slow"]).optional(),
+      audioBitrateK: z.number().int().min(64).max(512).optional(),
+      loudnessLufs: z.number().min(-30).max(-8).nullable().optional(),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      session(ctx).dispatch("project.setExport", i, ctx.source, label("export settings"));
+      return { data: session(ctx).project.export };
+    },
+  }),
+  tool({
     name: "export_render",
     description: `Start the final export (Blender final-quality 3D frames + FFmpeg composition + verification). Returns a jobId; with wait=true it waits up to ${MAX_TOOL_WAIT_S} s (MCP clients time out around 60 s) and otherwise returns status "running" — then poll export_status with waitSeconds. Presets: reel1080, square1080, landscape1080, landscape4k, reel4k, master (ProRes).`,
     input: z.object({ preset: z.string().optional(), outPath: z.string().optional(), wait: z.boolean().default(false) }),

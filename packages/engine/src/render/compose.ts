@@ -21,6 +21,8 @@ export interface ComposeOptions {
   /** Draft previews favour speed over size/quality. */
   draft?: boolean;
   includeAudio?: boolean;
+  /** Loudness target of the final mix (exports). */
+  loudnessLufs?: number | null;
   signal?: AbortSignal;
   onProgress?: (f: number) => void;
   keepWorkDir?: boolean;
@@ -38,6 +40,7 @@ export async function compose(opts: ComposeOptions): Promise<{ outPath: string; 
     sceneFrames: opts.sceneFrames,
     fontFile: opts.fontFile,
     includeAudio: opts.includeAudio ?? opts.output === "video",
+    loudnessLufs: opts.loudnessLufs,
     output: opts.output,
     writeFile: (name, content) => void pending.push(writeFile(path.join(workDir, name), content, "utf8")),
   });

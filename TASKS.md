@@ -55,7 +55,7 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Layer blend modes: screen, add, multiply, overlay, soft light, lighten, darken, difference (pixel-checked)
 - [x] Letterbox bars and digital glitch (jitter + RGB split, exact in export, channel-split live)
 - [ ] Cycles GPU quality presets in the UI
-- [ ] Audio: ducking music under dialogue/SFX, loudness-normalized export
+- [x] Audio: clip-timed ducking of music under dialogue/SFX roles; loudness-normalised export (loudnorm, verified with ebur128)
 - [ ] Persist undo history and job history across sessions
 
 ## M7 AI Director

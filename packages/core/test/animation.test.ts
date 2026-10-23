@@ -64,3 +64,21 @@ describe("typewriter and wipe masks", () => {
     expect(transitionMask({ ...c, transitionIn: { type: "crossfade", duration: 10 } }, 5)).toBeNull();
   });
 });
+
+describe("music ducking", () => {
+  it("builds a dB envelope with attack/release and joins close triggers", async () => {
+    const { duckCurve, evalCurve } = await import("../src/index.js");
+    const d = { enabled: true, amountDb: 12, attackFrames: 5, releaseFrames: 10, triggers: ["dialogue" as const] };
+    const c = duckCurve([[30, 60], [65, 90], [200, 220]], d, 10);
+    // Clip-relative frames (clip starts at 10). 60→65 is shorter than attack+release: stays ducked.
+    expect(evalCurve(c, 0)).toBe(0);
+    expect(evalCurve(c, 15)).toBe(0);
+    expect(evalCurve(c, 17.5)).toBeCloseTo(-6);
+    expect(evalCurve(c, 20)).toBe(-12);
+    expect(evalCurve(c, 52)).toBe(-12);
+    expect(evalCurve(c, 85)).toBeCloseTo(-6);
+    expect(evalCurve(c, 120)).toBe(0);
+    expect(evalCurve(c, 192)).toBe(-12);
+    expect(duckCurve([], d, 0)).toEqual([]);
+  });
+});

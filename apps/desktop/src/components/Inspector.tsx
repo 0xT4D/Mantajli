@@ -577,6 +577,38 @@ function ProjectInspector({ project }: { project: Project }) {
         <Row label="Audio">
           <Select value={String(project.export.audioBitrateK)} onChange={(v) => cmd("project.setExport", { audioBitrateK: Number(v) }, "Audio bitrate")} options={["128", "192", "256", "320"].map((b) => ({ value: b, label: `${b} kbps AAC` }))} />
         </Row>
+        <Row label="Loudness" title="Normalise the exported mix to an integrated loudness (EBU R128). Previews are not normalised.">
+          <Select
+            value={project.export.loudnessLufs === null ? "off" : String(project.export.loudnessLufs)}
+            onChange={(v) => cmd("project.setExport", { loudnessLufs: v === "off" ? null : Number(v) }, "Export loudness")}
+            options={[
+              { value: "off", label: "As mixed" },
+              { value: "-14", label: "-14 LUFS (YouTube, TikTok, Reels)" },
+              { value: "-16", label: "-16 LUFS (podcasts, Apple)" },
+              { value: "-23", label: "-23 LUFS (broadcast)" },
+            ]}
+          />
+        </Row>
+      </Section>
+      <Section title="Audio mix">
+        <Row label="Ducking" title="Lower music-role tracks while dialogue (and optionally SFX) clips play">
+          <Toggle checked={project.mix.ducking.enabled} onChange={(v) => cmd("project.setMix", { ducking: { enabled: v } }, "Ducking")} label={project.mix.ducking.enabled ? "On" : "Off"} />
+        </Row>
+        {project.mix.ducking.enabled && (
+          <>
+            <Row label="Amount">
+              <Slider value={project.mix.ducking.amountDb} min={0} max={30} step={1} unit="dB" onChange={(v) => cmd("project.setMix", { ducking: { amountDb: v } }, "Ducking amount")} />
+            </Row>
+            <Row label="Attack / release">
+              <NumberField value={project.mix.ducking.attackFrames} min={0} max={120} step={1} unit="f" onChange={(v) => cmd("project.setMix", { ducking: { attackFrames: v } }, "Ducking attack")} />
+              <NumberField value={project.mix.ducking.releaseFrames} min={0} max={240} step={1} unit="f" onChange={(v) => cmd("project.setMix", { ducking: { releaseFrames: v } }, "Ducking release")} />
+            </Row>
+            <Row label="Triggers">
+              <Toggle checked={project.mix.ducking.triggers.includes("sfx")} onChange={(v) => cmd("project.setMix", { ducking: { triggers: v ? ["dialogue", "sfx"] : ["dialogue"] } }, "Ducking triggers")} label="Also under SFX" />
+            </Row>
+            <div className="text-[10px] text-mute">Music-role tracks dip while dialogue-role tracks play. Set track roles in the track inspector.</div>
+          </>
+        )}
       </Section>
       <Section title="Stats" defaultOpen={false}>
         <div className="space-y-0.5 text-[11px] text-dim">

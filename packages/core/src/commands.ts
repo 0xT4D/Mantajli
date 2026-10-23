@@ -9,6 +9,7 @@ import {
   AssetSchema,
   EASINGS,
   ExportSettingsSchema,
+  MixSettingsSchema,
   HexColor,
   IdSchema,
   KEYFRAME_PROPERTIES,
@@ -247,6 +248,14 @@ export const COMMANDS = {
       if (s.width) p.settings.width = s.width;
       if (s.height) p.settings.height = s.height;
       if (s.background) p.settings.background = s.background;
+    },
+  }),
+
+  "project.setMix": def({
+    description: "Update the automatic mix (music ducking under dialogue/SFX clips).",
+    params: z.object({ ducking: patchSchema(MixSettingsSchema.shape.ducking.unwrap()).optional() }),
+    apply(p, s) {
+      if (s.ducking) Object.assign(p.mix.ducking, Object.fromEntries(Object.entries(s.ducking).filter(([, v]) => v !== undefined)));
     },
   }),
 

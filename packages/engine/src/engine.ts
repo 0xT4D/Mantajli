@@ -629,6 +629,7 @@ export class Engine extends EventEmitter {
         sceneFrames: (id) => (dirs.has(id) ? { dir: dirs.get(id)! } : undefined),
         fontFile: this.fontFor,
         encoding: { ...p.export, codec },
+        loudnessLufs: p.export.loudnessLufs,
         signal: ctx.signal,
         onProgress: (f) => ctx.progress(sceneWeight + f * (0.97 - sceneWeight), "Composing and encoding"),
       });

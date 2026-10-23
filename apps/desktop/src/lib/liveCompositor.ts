@@ -1,5 +1,6 @@
 import {
   buildCompositionPlan,
+  evalCurve,
   evalLayer,
   findAsset,
   fpsValue,
@@ -277,7 +278,7 @@ export class LiveCompositor {
         const clip = seg.clip;
         const fps = fpsValue(project.settings.fps);
         const f = seg.clipOffset;
-        let gain = Math.pow(10, seg.gainDb / 20);
+        let gain = Math.pow(10, (seg.gainDb + (seg.duck.length ? evalCurve(seg.duck, f) : 0)) / 20);
         if (clip.fadeIn > 0 && f < clip.fadeIn) gain *= f / clip.fadeIn;
         if (clip.fadeOut > 0 && f > clip.duration - clip.fadeOut) gain *= (clip.duration - f) / clip.fadeOut;
         el.volume = Math.max(0, Math.min(1, gain));

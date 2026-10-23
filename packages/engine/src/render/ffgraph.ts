@@ -56,6 +56,8 @@ export interface GraphContext {
   writeFile(name: string, content: string): void;
   includeAudio: boolean;
   output: "video" | "still";
+  /** Integrated loudness target (LUFS) for the final mix; null/undefined = as mixed. */
+  loudnessLufs?: number | null;
 }
 
 export interface BuiltGraph {
@@ -601,7 +603,8 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
       if (c.fadeIn > 0) fades.push(`(${curveExpr([{ frame: 0, value: 0, easing: "linear" }, { frame: c.fadeIn, value: 1, easing: "linear" }], Ta, fps)})`);
       if (c.fadeOut > 0)
         fades.push(`(${curveExpr([{ frame: c.duration - c.fadeOut, value: 1, easing: "linear" }, { frame: c.duration, value: 0, easing: "linear" }], Ta, fps)})`);
-      const vol = `pow(10,((${kf})+${n6(trackGain)})/20)${fades.length ? "*" + fades.join("*") : ""}`;
+      const duck = seg.duck.length ? `+(${curveExpr(seg.duck, Ta, fps)})` : "";
+      const vol = `pow(10,((${kf})+${n6(trackGain)}${duck})/20)${fades.length ? "*" + fades.join("*") : ""}`;
       f.push(`volume=volume='${vol}':eval=frame`);
       const delayMs = ((seg.start - plan.rangeStart) / fps) * 1000;
       if (delayMs > 0.5) f.push(`adelay=delays=${n6(delayMs)}:all=1`);
@@ -613,7 +616,9 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     if (labels.length === 0) stmts.push(`anullsrc=r=${SR}:cl=stereo,atrim=end_sample=${total}[${audioLabel}]`);
     else {
       const mix = labels.length === 1 ? `[${labels[0]}]anull` : `${labels.map((l) => `[${l}]`).join("")}amix=inputs=${labels.length}:normalize=0:duration=longest`;
-      stmts.push(`${mix},apad,atrim=end_sample=${total},alimiter=limit=0.977:attack=5:release=50:level=0[${audioLabel}]`);
+      // Optional EBU R128 normalisation (single-pass loudnorm resamples internally, so resample back).
+      const loud = ctx.loudnessLufs != null ? `loudnorm=I=${n6(ctx.loudnessLufs)}:TP=-1.5:LRA=11,aresample=${SR},` : "";
+      stmts.push(`${mix},apad,atrim=end_sample=${total},${loud}alimiter=limit=0.977:attack=5:release=50:level=0,atrim=end_sample=${total}[${audioLabel}]`);
     }
   }
 
