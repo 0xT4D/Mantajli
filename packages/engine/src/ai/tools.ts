@@ -10,6 +10,7 @@ import {
   FORMAT_PRESETS,
   KEYFRAME_PROPERTIES,
   SPEED_RAMP_PRESETS,
+  CAPTION_STYLES,
   RENDER_PRESETS,
   RENDER_PRESET_IDS,
   BLEND_MODES,
@@ -36,6 +37,7 @@ import {
 } from "@mantagli/core";
 import type { Engine } from "../engine.js";
 import { exportOtio, importOtio } from "../interchange/otio.js";
+import { exportCaptions, importCaptions } from "../interchange/captions.js";
 import { isInside, safeName } from "../util/fsx.js";
 
 /**
@@ -850,6 +852,29 @@ export const TOOLS: ToolDef[] = [
       const out = i.outPath ? path.resolve(i.outPath) : path.join(s.dir, "exports", `${safeName(s.project.name)}.otio`);
       if (!mediaRoots(ctx).some((r) => isInside(r, out))) fail("permission_denied", "OTIO path must be inside the project folder or a user media folder");
       return { data: await exportOtio(ctx.engine, out) };
+    },
+  }),
+  tool({
+    name: "captions_import",
+    description: `Import subtitles (.srt or .vtt) as styled caption text clips on a new top "Captions" track (one undo step). style: ${CAPTION_STYLES.join(", ")} (bold = stroked, pops in; boxed = background box; karaoke = yellow stroked). position: bottom (above platform UI on vertical video), middle, top. offsetFrames shifts all cues.`,
+    input: z.object({ path: z.string().min(1), style: z.enum(CAPTION_STYLES).default("bold"), position: z.enum(["bottom", "middle", "top"]).default("bottom"), offsetFrames: z.number().int().default(0) }),
+    mutates: true,
+    async run(ctx, i) {
+      const p = path.resolve(i.path);
+      if (!mediaRoots(ctx).some((r) => isInside(r, p))) fail("permission_denied", "Subtitle file must be inside the project folder or a user media folder");
+      return { data: await importCaptions(ctx.engine, p, { style: i.style, position: i.position, offsetFrames: i.offsetFrames }, ctx.source === "mcp" ? "mcp" : "ai") };
+    },
+  }),
+  tool({
+    name: "captions_export",
+    description: "Write the text clips of a track (e.g. the Captions track) as an .srt subtitle file for platforms. Defaults to <project>/exports/<name>.srt.",
+    input: z.object({ trackId: Id, outPath: z.string().optional() }),
+    mutates: false,
+    async run(ctx, i) {
+      const s = session(ctx);
+      const out = i.outPath ? path.resolve(i.outPath) : path.join(s.dir, "exports", `${safeName(s.project.name)}.srt`);
+      if (!mediaRoots(ctx).some((r) => isInside(r, out))) fail("permission_denied", "SRT path must be inside the project folder or a user media folder");
+      return { data: await exportCaptions(ctx.engine, i.trackId, out) };
     },
   }),
   tool({

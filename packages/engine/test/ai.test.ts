@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -203,5 +203,32 @@ describe("AI director", () => {
     const done = await waitDone(director, run.id);
     expect(done.status).toBe("cancelled");
     expect(engine.project.tracks.find((t) => t.id === v1())!.clips).toHaveLength(6);
+  });
+});
+
+describe("captions", () => {
+  it("imports subtitles as styled caption clips and exports them back to SRT", async () => {
+    const srt = path.join(engine.requireSession().dir, "subs.srt");
+    await writeFile(srt, "1\n00:00:01,000 --> 00:00:02,000\nFirst\n\n2\n00:00:01,800 --> 00:00:03,000\nOverlaps\n");
+    const r = await executeTool(ctx(), "captions_import", { path: srt, style: "boxed", position: "bottom" });
+    expect(r.ok, JSON.stringify(r.error)).toBe(true);
+    const caps = engine.project.tracks[0]!;
+    expect(caps).toMatchObject({ name: "Captions", kind: "text" });
+    // 30 fps landscape project; the first cue is trimmed to where the second starts.
+    expect(caps.clips.map((c) => [c.start, c.duration])).toEqual([[30, 24], [54, 36]]);
+    const first = caps.clips[0]!;
+    expect(first.type === "text" && first.style.box).toBe(true);
+    expect(first.transform.y).toBeGreaterThan(0);
+    engine.requireSession().undo();
+    expect(engine.project.tracks.some((t) => t.name === "Captions")).toBe(false);
+    engine.requireSession().redo();
+
+    const out = await executeTool(ctx(), "captions_export", { trackId: caps.id });
+    expect(out.ok, JSON.stringify(out.error)).toBe(true);
+    const text = await readFile((out.data as { path: string }).path, "utf8");
+    expect(text).toContain("00:00:01,000 --> 00:00:01,800\nFirst");
+    // Outside the allowed folders is refused for AI callers.
+    const denied = await executeTool(ctx(), "captions_import", { path: path.join(os.tmpdir(), "x.srt") });
+    expect(denied.error?.category).toBe("permission_denied");
   });
 });

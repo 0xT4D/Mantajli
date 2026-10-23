@@ -10,6 +10,8 @@ import { Director } from "./ai/director.js";
 import { executeTool, TOOLS, toolJsonSchema } from "./ai/tools.js";
 import { Engine } from "./engine.js";
 import { exportOtio, importOtio } from "./interchange/otio.js";
+import { exportCaptions, importCaptions } from "./interchange/captions.js";
+import type { CaptionPosition, CaptionStyle } from "@mantagli/core";
 import { availableFontFamilies } from "./render/fonts.js";
 import { ProjectSession } from "./session.js";
 import { isInside, safeName, writeFileAtomic } from "./util/fsx.js";
@@ -155,6 +157,12 @@ export class EngineServer {
       return exportOtio(this.engine, out);
     },
     "interchange.importOtio": (p) => importOtio(this.engine, String(p.path), "user"),
+    "interchange.importCaptions": (p) => importCaptions(this.engine, String(p.path), { style: p.style as CaptionStyle | undefined, position: p.position as CaptionPosition | undefined, offsetFrames: p.offsetFrames as number | undefined }, "user"),
+    "interchange.exportCaptions": (p) => {
+      const s = this.engine.requireSession();
+      const out = p.path ? String(p.path) : path.join(s.dir, "exports", `${safeName(s.project.name)}.srt`);
+      return exportCaptions(this.engine, String(p.trackId), out);
+    },
 
     "jobs.list": () => this.engine.jobs.list(),
     "jobs.cancel": (p) => this.engine.jobs.cancel(String(p.jobId)),

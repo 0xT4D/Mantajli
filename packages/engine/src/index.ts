@@ -11,3 +11,4 @@ export * from "./ai/director.js";
 export * from "./ai/tools.js";
 export * from "./server.js";
 export * from "./interchange/otio.js";
+export * from "./interchange/captions.js";

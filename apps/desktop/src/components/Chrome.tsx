@@ -318,12 +318,57 @@ export function ExportDialog() {
           </div>
         )}
         <OtioSection />
+        <CaptionsSection />
       </div>
     </Dialog>
   );
 }
 
 const OTIO_FILTERS = [{ name: "OpenTimelineIO", extensions: ["otio"] }];
+const SUB_FILTERS = [{ name: "Subtitles", extensions: ["srt", "vtt"] }];
+
+/** Subtitles in (styled caption clips) and out (.srt from a text track). */
+function CaptionsSection() {
+  const { call, toast, session } = useStudio();
+  const p = session.project!;
+  const [style, setStyle] = useState<string>("bold");
+  const [position, setPosition] = useState<string>("bottom");
+  const textTracks = p.tracks.filter((t) => t.kind === "text" && t.clips.some((c) => c.type === "text"));
+  const [trackId, setTrackId] = useState<string>("");
+  const exportTrack = textTracks.find((t) => t.id === trackId) ?? textTracks.find((t) => t.name === "Captions") ?? textTracks[0];
+  const importSubs = async () => {
+    const picked = await pickFiles({ filters: SUB_FILTERS, title: "Import subtitles" });
+    const file = picked === null ? window.prompt("Path of the .srt or .vtt file") : picked[0];
+    if (!file) return;
+    const r = await call<{ clips: number; skipped: number }>("interchange.importCaptions", { path: file, style, position }).catch(() => null);
+    if (r) toast("ok", `Imported ${r.clips} captions${r.skipped ? ` (${r.skipped} skipped)` : ""}`);
+  };
+  const exportSubs = async () => {
+    if (!exportTrack) return;
+    const r = await pickSavePath({ defaultPath: `${p.name}.srt`, filters: [{ name: "SubRip", extensions: ["srt"] }] });
+    if (r === null) return;
+    const out = await call<{ path: string; cues: number }>("interchange.exportCaptions", { trackId: exportTrack.id, ...(r ? { path: r } : {}) }).catch(() => null);
+    if (out) toast("ok", `Wrote ${out.cues} cues to ${out.path}`);
+  };
+  return (
+    <div className="space-y-1.5 border-t border-line pt-2">
+      <div className="text-[11px] font-semibold text-dim">Captions (.srt / .vtt)</div>
+      <Row label="Style">
+        <Select value={style} onChange={setStyle} options={[{ value: "bold", label: "Bold (stroked, pop)" }, { value: "boxed", label: "Boxed" }, { value: "clean", label: "Clean" }, { value: "karaoke", label: "Karaoke yellow" }]} />
+        <Select value={position} onChange={setPosition} options={[{ value: "bottom", label: "Bottom" }, { value: "middle", label: "Middle" }, { value: "top", label: "Top" }]} />
+      </Row>
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={() => void importSubs()}>Import subtitles</Button>
+        {exportTrack && (
+          <>
+            <Select value={exportTrack.id} onChange={setTrackId} options={textTracks.map((t) => ({ value: t.id, label: t.name }))} />
+            <Button onClick={() => void exportSubs()}>Export .srt</Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 /** Timeline interchange with other editors (OpenTimelineIO JSON). */
 function OtioSection() {

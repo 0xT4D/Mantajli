@@ -59,6 +59,12 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Undo/redo history persisted across sessions (content-addressed snapshots, history.json; discarded if project.json changed elsewhere)
 - [ ] Job history persisted across sessions (optional)
 
+## M10 Creator features (session 2, continued)
+- [x] Captions: SRT/WebVTT import as styled caption clips (bold/boxed/clean/karaoke, safe-zone aware), SRT export (captions.test, ai.test)
+- [ ] One-click auto-edit to beats in the UI
+- [ ] Freeze frame and reverse clips
+- [ ] Chroma key (green screen)
+
 ## M7 AI Director
 - [x] Shared tool layer (52 tools), MCP server (standalone + bridge to app)
 - [x] Director loop (streaming, approvals, cancel, revert/accept, previews as images)
