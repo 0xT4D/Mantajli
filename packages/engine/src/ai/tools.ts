@@ -11,6 +11,7 @@ import {
   COMMAND_NAMES,
   projectDuration,
   EASINGS,
+  EXPORT_PRESETS,
   CAMERA_MOVES,
   SCATTER_DISTRIBUTIONS,
   EFFECTS,
@@ -252,7 +253,7 @@ export const TOOLS: ToolDef[] = [
           easings: EASINGS,
           cameraMoves: CAMERA_MOVES,
           scatterDistributions: SCATTER_DISTRIBUTIONS,
-          exportPresets: ["reel1080", "square1080", "landscape1080", "landscape4k", "reel4k", "master"],
+          exportPresets: EXPORT_PRESETS,
           notes: [
             "Track index 0 is the top layer. Clips on one track never overlap (overwrite mode trims/splits what is underneath).",
             "A transition belongs to the incoming clip and plays over its first N frames; the previous clip on the same track is held underneath.",
@@ -1279,7 +1280,7 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "audio_meter",
-    description: "Measure the mix of the timeline (or start-end frames) as it will be exported - gains, fades, ducking, loudness target, limiter, AAC: integrated loudness (LUFS), loudness range, true peak and the spans hotter than -1 dBTP, with warnings (clipping risk, too quiet/loud for platforms, voice over un-ducked music). Renders the audio only.",
+    description: "Measure the mix of the timeline (or start-end frames) as it will be exported - gains, fades, ducking, loudness target, limiter, AAC: integrated loudness (LUFS), loudness range, true peak and the spans hotter than -0.5 dBTP (the master limiter holds -1 dBTP), with warnings (clipping risk, too quiet/loud for platforms, voice over un-ducked music). Renders the audio only.",
     input: z.object({ start: Frame.optional(), end: Frame.optional() }),
     mutates: false,
     async run(ctx, i) {
@@ -1287,7 +1288,7 @@ export const TOOLS: ToolDef[] = [
       const m = await ctx.engine.meterMix({ start: i.start, end: i.end });
       const fps = s.project.settings.fps.num / s.project.settings.fps.den;
       const warnings: string[] = [];
-      if (m.truePeakDb > -1) warnings.push(`True peak ${m.truePeakDb.toFixed(1)} dBTP: may distort on platforms; lower the loudest clips or set an export loudness target.`);
+      if (m.truePeakDb > -0.5) warnings.push(`True peak ${m.truePeakDb.toFixed(1)} dBTP: may distort on platforms; lower the loudest clips${s.project.export.loudnessLufs == null ? " or set an export loudness target" : ""}.`);
       if (m.integratedLufs < -20) warnings.push(`Quiet mix (${m.integratedLufs.toFixed(1)} LUFS); social platforms play around -14 LUFS - set export loudness to -14.`);
       if (m.integratedLufs > -9) warnings.push(`Very loud mix (${m.integratedLufs.toFixed(1)} LUFS); platforms will turn it down and it may sound squashed.`);
       if (m.loudnessRangeLu > 15) warnings.push(`Wide loudness range (${m.loudnessRangeLu.toFixed(1)} LU): quiet passages may be lost on phones.`);
@@ -1340,7 +1341,7 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "export_render",
-    description: `Start the final export (Blender final-quality 3D frames + FFmpeg composition + verification). Returns a jobId; with wait=true it waits up to ${MAX_TOOL_WAIT_S} s (MCP clients time out around 60 s) and otherwise returns status "running" — then poll export_status with waitSeconds. Presets: reel1080, square1080, landscape1080, landscape4k, reel4k, master (ProRes).`,
+    description: `Start the final export (Blender final-quality 3D frames + FFmpeg composition + verification). Returns a jobId; with wait=true it waits up to ${MAX_TOOL_WAIT_S} s (MCP clients time out around 60 s) and otherwise returns status "running" — then poll export_status with waitSeconds. Presets: reel1080, square1080, landscape1080, landscape4k, reel4k, reel720, landscape720 (H.264), project (H.264 at the project's size), master (ProRes at the project's size). The preset's size must match the project's aspect ratio.`,
     input: z.object({ preset: z.string().optional(), outPath: z.string().optional(), wait: z.boolean().default(false) }),
     mutates: false,
     async run(ctx, i) {

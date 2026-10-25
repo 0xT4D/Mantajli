@@ -44,6 +44,9 @@ export const EXPORT_PRESET_SIZES: Record<string, { width: number; height: number
   landscape1080: { width: 1920, height: 1080 },
   landscape4k: { width: 3840, height: 2160 },
   reel4k: { width: 2160, height: 3840 },
+  reel720: { width: 720, height: 1280 },
+  landscape720: { width: 1280, height: 720 },
+  project: { width: 0, height: 0 },
   master: { width: 0, height: 0, codec: "prores" },
 };
 
@@ -848,7 +851,7 @@ export function parseEbur128(log: string, startFrame: number, fps: number): MixM
     const st = Number(m[2]);
     if (t >= 3 && Number.isFinite(st)) maxS = Math.max(maxS, st);
     const pk = Math.max(Number(m[3]), Number(m[4]));
-    if (pk > -1) {
+    if (pk > -0.5) {
       const f = startFrame + Math.round(t * fps);
       const last = hot[hot.length - 1];
       if (last && f - last.end <= Math.round(fps * 0.25)) {

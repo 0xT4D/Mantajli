@@ -515,7 +515,8 @@ export const SettingsSchema = z.object({
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
-export const EXPORT_PRESETS = ["reel1080", "square1080", "landscape1080", "landscape4k", "reel4k", "master"] as const;
+/** "project" = H.264 at the project's own size; "master" = ProRes at the project's size. */
+export const EXPORT_PRESETS = ["reel1080", "square1080", "landscape1080", "landscape4k", "reel4k", "reel720", "landscape720", "project", "master"] as const;
 
 export const ExportSettingsSchema = z.object({
   preset: z.enum(EXPORT_PRESETS).default("reel1080"),

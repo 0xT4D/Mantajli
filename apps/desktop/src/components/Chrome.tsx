@@ -235,6 +235,9 @@ export function ExportDialog() {
     { value: "square1080", label: "Square 1080×1080 H.264", a: 1 },
     { value: "landscape1080", label: "YouTube 1920×1080 H.264", a: 16 / 9 },
     { value: "landscape4k", label: "4K 3840×2160 H.264", a: 16 / 9 },
+    { value: "reel720", label: "Reel 720×1280 H.264 (smaller, faster)", a: 9 / 16 },
+    { value: "landscape720", label: "HD 1280×720 H.264 (smaller, faster)", a: 16 / 9 },
+    { value: "project", label: `Project size ${p.settings.width}×${p.settings.height} H.264`, a: aspect },
     { value: "master", label: `Master ProRes 422 HQ (${p.settings.width}×${p.settings.height})`, a: aspect },
   ].filter((x) => Math.abs(x.a - aspect) < 0.01);
   const [preset, setPreset] = useState(presets.find((x) => x.value === p.export.preset)?.value ?? presets[0]?.value ?? "master");

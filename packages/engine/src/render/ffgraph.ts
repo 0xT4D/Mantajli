@@ -834,7 +834,10 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
       const mix = labels.length === 1 ? `[${labels[0]}]anull` : `${labels.map((l) => `[${l}]`).join("")}amix=inputs=${labels.length}:normalize=0:duration=longest`;
       // Optional EBU R128 normalisation (single-pass loudnorm resamples internally, so resample back).
       const loud = ctx.loudnessLufs != null ? `loudnorm=I=${n6(ctx.loudnessLufs)}:TP=-1.5:LRA=11,aresample=${SR},` : "";
-      stmts.push(`${mix},apad,atrim=end_sample=${total},${loud}alimiter=limit=0.977:attack=5:release=50:level=0,atrim=end_sample=${total}[${audioLabel}]`);
+      // Master ceiling -1 dBTP: limit at 4x oversampling (as true-peak meters measure), so inter-sample
+      // overs cannot push the decoded signal past 0 dBFS the way a sample-peak limiter lets them.
+      const ceiling = `aresample=${SR * 4},alimiter=limit=0.891:attack=5:release=50:level=0,aresample=${SR}`;
+      stmts.push(`${mix},apad,atrim=end_sample=${total},${loud}${ceiling},atrim=end_sample=${total}[${audioLabel}]`);
     }
   }
 

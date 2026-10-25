@@ -341,7 +341,7 @@ export function SoundDesignDialog() {
           <div className="space-y-1 rounded border border-line p-2 text-[11px]">
             <div className="flex flex-wrap gap-3">
               <span>Integrated <b>{db(meter.integratedLufs, "LUFS")}</b></span>
-              <span>True peak <b className={(meter.truePeakDb ?? -99) > -1 ? "text-warn" : ""}>{db(meter.truePeakDb, "dBTP")}</b></span>
+              <span>True peak <b className={(meter.truePeakDb ?? -99) > -0.5 ? "text-warn" : ""}>{db(meter.truePeakDb, "dBTP")}</b></span>
               <span>Range {db(meter.loudnessRangeLu, "LU")}</span>
               <span>Loudest 3 s {db(meter.maxShortTermLufs, "LUFS")}</span>
               <span className="text-mute">export target: {meter.exportLoudnessTarget ?? "as mixed"}</span>

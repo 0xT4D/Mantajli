@@ -428,6 +428,32 @@ await step("sfx_generate: riser ends on the anchor, whoosh on the SFX track", as
   check(!!w.clipId, "no whoosh clip");
   return `riser 90-120, whoosh at ${w.start}`;
 });
+await step("music_generate: exact length, beat grid and sections on the asset", async () => {
+  const m = await ui.tool("music_generate", { style: "techno", mood: "tense", duration: 8, seed: 3, place: false });
+  const a = Object.values(await ui.tool("media_list_assets", {})).find((x: { id: string }) => x.id === m.assetId);
+  check(Math.abs(a.meta.duration - 8) < 0.05, `length ${a.meta.duration}`);
+  check(m.bpm === 128 && a.bpm === 128, `bpm ${m.bpm} / asset ${a.bpm}`);
+  check(m.sections.some((x: { label: string }) => x.label === "drop"), JSON.stringify(m.sections));
+  return `${m.bpm} BPM, ${m.sections.map((x: { label: string }) => x.label).join("/")}`;
+});
+await step("voice_providers + voice_narrate (captions) + voice_regenerate", async () => {
+  const pv = await ui.tool("voice_providers", {});
+  const local = pv.providers.find((x: { kind: string; available: boolean }) => x.kind === "local" && x.available);
+  if (!local) return `skipped: no local TTS engine (${pv.providers.map((x: { id: string; available: boolean }) => `${x.id}:${x.available}`).join(" ")})`;
+  const n = await ui.tool("voice_narrate", { segments: [{ text: "Cut to the beat." }, { text: "Render in Blender." }], start: 1300, captions: true, duck: false });
+  check(n.segments.length === 2 && n.segments.every((x: { captions: number }) => x.captions >= 1), JSON.stringify(n).slice(0, 300));
+  // Re-voice the last line (a longer take must not run into the next segment).
+  const r = await ui.tool("voice_regenerate", { clipId: n.segments[1].clipId, text: "Then render it in Blender." });
+  check(!!r.clipId && r.start === n.segments[1].start && r.captions >= 1, JSON.stringify(r).slice(0, 300));
+  return `${n.provider}: ${n.segments.map((x: { frames: number }) => x.frames).join("+")} frames; re-voiced ${r.previousFrames} -> ${r.frames}`;
+});
+await step("sfx_suggest + audio_meter", async () => {
+  const sd = await ui.tool("sfx_suggest", {});
+  const m = await ui.tool("audio_meter", { start: 0, end: 300 });
+  check(Number.isFinite(m.integratedLufs) && Number.isFinite(m.truePeakDb), JSON.stringify(m).slice(0, 300));
+  check(m.truePeakDb < 0, `true peak ${m.truePeakDb}`);
+  return `${sd.suggestions.length} suggestions; ${m.integratedLufs} LUFS, ${m.truePeakDb} dBTP`;
+});
 await step("look_save + look_apply (saved look)", async () => {
   await ui.tool("effect_add", { clipId: S.lab, type: "scanlines", params: { amount: 0.4 } });
   const l = await ui.tool("look_save", { clipId: S.lab, label: "Sweep look" });
