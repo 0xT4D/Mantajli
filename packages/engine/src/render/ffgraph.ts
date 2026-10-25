@@ -33,7 +33,11 @@ import {
   transitionFx,
   cropsToFrameCell,
   vignetteAngle,
+  backdropKey,
+  hasBackdrop,
+  renderBackdrop,
 } from "@mantagli/core";
+import { encodePng } from "../util/png.js";
 
 /**
  * Builds an FFmpeg filter graph that renders a CompositionPlan.
@@ -50,7 +54,7 @@ import {
  * bump it whenever the same plan renders different pixels (a fixed or changed
  * effect, transition or text renderer), so cached previews are not reused.
  */
-export const RENDERER_VERSION = 7;
+export const RENDERER_VERSION = 8;
 
 export interface SceneFrames {
   /** Directory of rendered PNG frames named frame_00001.png (1-based). */
@@ -67,13 +71,15 @@ export interface GraphContext {
   sceneFrames(sceneId: string): SceneFrames | undefined;
   fontFile(clip: TextClip): string | undefined;
   /** Files written into the work dir (text, sendcmd scripts). */
-  writeFile(name: string, content: string): void;
+  writeFile(name: string, content: string | Uint8Array): void;
   includeAudio: boolean;
   output: "video" | "still";
   /** Integrated loudness target (LUFS) for the final mix; null/undefined = as mixed. */
   loudnessLufs?: number | null;
   /** Measured gain that brings this mix to the target (two-pass); replaces single-pass loudnorm. */
   loudnessGainDb?: number;
+  /** Draft previews: cheaper resampling (lens distortion without supersampling). */
+  draft?: boolean;
 }
 
 export interface BuiltGraph {
@@ -343,15 +349,34 @@ export function rampRetime(clip: Clip, clipOffset: number, frames: number, fps: 
   return { filter: `setpts='st(0,PTS*TB-${n6(lead)});(${terms.join("+")})/TB',fps=${fps}:round=up`, sourceSeconds: last.s };
 }
 
-/** Geometric effects (lens distortion) on an RGBA stream: colour and alpha move together. */
-function geometryFilters(effects: Effect[]): string[] {
+const backdropCache = new Map<string, Buffer>();
+/** Encoded backdrop for one output size (seconds of CPU at 4K, so recent ones are kept). */
+function backdropPng(fill: string, b: Parameters<typeof renderBackdrop>[1], W: number, H: number): Buffer {
+  const key = backdropKey(fill, b, W, H);
+  let png = backdropCache.get(key);
+  if (!png) {
+    png = encodePng(renderBackdrop(fill, b, W, H), W, H);
+    backdropCache.set(key, png);
+    if (backdropCache.size > 12) backdropCache.delete(backdropCache.keys().next().value!);
+  }
+  return png;
+}
+
+/**
+ * Geometric effects (lens distortion) on an RGBA stream: colour and alpha move together.
+ * lenscorrection only interpolates bilinearly, which cost a third of the edge contrast of a
+ * CRT-finished title (ARENA benchmark), so exports remap at 2x and come back down with Lanczos.
+ */
+function geometryFilters(effects: Effect[], supersample: boolean): string[] {
   const out: string[] = [];
   for (const fx of effects) {
     if (!fx.enabled || !GEOMETRY_EFFECTS.has(fx.type)) continue;
     if (fx.type === "lensDistortion") {
       const k = lensCoefficients(Number(fx.params.amount));
       if (k.k1 === 0 && k.k2 === 0) continue;
-      out.push("format=gbrap", `lenscorrection=k1=${n6(k.k1)}:k2=${n6(k.k2)}:i=bilinear:fc=${fx.params.edges === "transparent" ? "black@0" : "black"}`);
+      const remap = `lenscorrection=k1=${n6(k.k1)}:k2=${n6(k.k2)}:i=bilinear:fc=${fx.params.edges === "transparent" ? "black@0" : "black"}`;
+      if (supersample) out.push("format=gbrap", "scale=iw*2:ih*2:flags=lanczos", remap, "scale=iw/2:ih/2:flags=lanczos");
+      else out.push("format=gbrap", remap);
     }
   }
   return out;
@@ -524,7 +549,13 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
         break;
       }
       case "color":
-        stmts.push(`color=c=${hex(clip.fill)}:s=${W}x${H}:r=${fpsR}:d=${n6(layerSec + 1)}[${src}]`);
+        if (hasBackdrop(clip.backdrop)) {
+          // Procedural card background, rasterized by core (same pixels as the live preview).
+          const name = `${id}bd.png`;
+          ctx.writeFile(name, backdropPng(clip.fill, clip.backdrop, W, H));
+          inputs.push(["-loop", "1", "-framerate", fpsR, "-t", n6(layerSec + 0.5), "-i", name]);
+          stmts.push(`[${inputs.length - 1}:v]fps=${fpsR}[${src}]`);
+        } else stmts.push(`color=c=${hex(clip.fill)}:s=${W}x${H}:r=${fpsR}:d=${n6(layerSec + 1)}[${src}]`);
         fullFrame = true;
         break;
       case "text": {
@@ -646,7 +677,7 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
         cur = fx.out;
       }
     }
-    const geo = geometryFilters(clip.effects);
+    const geo = geometryFilters(clip.effects, !ctx.draft);
     if (geo.length) {
       stmts.push(`[${cur}]${geo.join(",")}[${id}geo]`);
       cur = `${id}geo`;

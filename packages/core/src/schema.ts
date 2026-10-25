@@ -1,3 +1,4 @@
+import { BackdropSchema } from "./backdrop.js";
 import { z } from "zod";
 import { EFFECT_TYPES, TEXT_ANIMATIONS, TRANSITION_TYPES } from "./effects.js";
 
@@ -223,6 +224,8 @@ export const ColorClipSchema = z.object({
   ...ClipBase,
   type: z.literal("color"),
   fill: HexColor.default("#000000"),
+  /** Procedural card background (light, depth, texture) over the fill; absent or "flat" = plain fill. */
+  backdrop: BackdropSchema.optional(),
 });
 export type ColorClip = z.infer<typeof ColorClipSchema>;
 

@@ -1,6 +1,6 @@
 import { AlertTriangle, AudioLines, Box, Download, FileType, Film, Grid2x2, Image as ImageIcon, LayoutList, Link2, Palette, Plus, Search, Shapes, Star, Trash2, Wand2, Waves } from "lucide-react";
 import { useMemo, useState } from "react";
-import { formatDuration, LOOKS, SCENE_TEMPLATES, type Asset, type AssetKind } from "@mantagli/core";
+import { formatDuration, lookSpec, LOOKS, SCENE_TEMPLATES, type Asset, type AssetKind } from "@mantagli/core";
 import { engine } from "../engine/client";
 import { isTauri, MEDIA_FILTERS, pickFiles } from "../lib/platform";
 import { projectFile, useStudio } from "../store/studio";
@@ -368,7 +368,7 @@ function LooksTab() {
     void dispatch("look.save", { clipId: selectedClip.id, label: lookName.trim() }, `Save look ${lookName.trim()}`).then(() => setLookName("")).catch(() => {});
   };
   const apply = async (lookId: string) => {
-    const look = [...LOOKS, ...project.looks].find((l) => l.id === lookId)!;
+    const look = lookSpec(lookId, project.looks, project.settings)!;
     const visual = clipIds.filter((id) => project.tracks.some((t) => t.kind !== "audio" && t.clips.some((c) => c.id === id)));
     if (!visual.length) return toast("info", "Select one or more visual clips on the timeline first");
     const cmds = visual.flatMap((clipId) => {

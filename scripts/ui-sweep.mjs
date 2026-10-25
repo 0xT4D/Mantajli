@@ -97,6 +97,17 @@ await state("insert adjustment layer (inspector)", async () => {
   await page.locator("text=/Adjustment ·/").first().waitFor({ timeout: 4000 });
 });
 await state("undo the insert", () => page.keyboard.press("Control+z"));
+await state("colour solid with a smoke backdrop (inspector)", async () => {
+  await page.locator("button[title^='Insert title']").first().click();
+  await page.locator("button:has-text('Colour solid')").first().click();
+  await page.locator("select:has(option[value='smoke'])").first().selectOption("smoke");
+  await page.locator("text=Texture").first().waitFor({ timeout: 4000 });
+  await page.waitForTimeout(1500); // live backdrop raster
+});
+await state("undo backdrop + insert", async () => {
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+z");
+});
 const openInsert = async (item) => {
   await page.locator("button[title^='Insert title']").first().click();
   await page.locator(`button:has-text('${item}')`).first().click();
@@ -115,6 +126,10 @@ await state("voice-over: estimate and preview", async () => {
   await page.locator("div[role=dialog] >> text=/Estimated/").first().waitFor({ timeout: 10000 });
   await page.locator("button:has-text('Preview first segment')").first().click();
   await page.locator("audio[controls]").first().waitFor({ timeout: 60000 });
+});
+await state("voice-over: compare local engines", async () => {
+  await page.locator("button:has-text('Compare engines')").first().click();
+  await page.locator("[data-testid=voice-compare] audio").nth(1).waitFor({ timeout: 90000 });
 });
 await state("close voice-over", closeDialog);
 await state("sound design: suggestions and mix meter", async () => {

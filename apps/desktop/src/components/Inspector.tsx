@@ -1,6 +1,8 @@
 import { ArrowDown, ArrowUp, Box, Camera, Coins, Diamond, Eye, EyeOff, Image as ImageIcon, Lightbulb, Plus, Route, Shapes, Sparkle, Trash2, Type } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  BACKDROP_STYLE_LABELS,
+  BACKDROP_STYLES,
   clipPropertyAt,
   EFFECTS,
   effectSpec,
@@ -229,6 +231,32 @@ function ClipInspector({ project, clip, track }: { project: Project; clip: Clip;
           <Row label="Colour">
             <ColorField value={clip.fill} onChange={(v) => upd({ fill: v }, "Colour")} />
           </Row>
+          <Row label="Backdrop">
+            <Select
+              value={clip.backdrop?.style ?? "flat"}
+              onChange={(v) => upd({ backdrop: v === "flat" ? null : { style: v } }, "Backdrop")}
+              options={BACKDROP_STYLES.map((v) => ({ value: v, label: BACKDROP_STYLE_LABELS[v] }))}
+            />
+          </Row>
+          {clip.backdrop && clip.backdrop.style !== "flat" && (
+            <>
+              <Row label="Accent">
+                <ColorField value={clip.backdrop.accent} onChange={(v) => upd({ backdrop: { accent: v } }, "Backdrop accent")} />
+              </Row>
+              <Row label="Light">
+                <Slider value={clip.backdrop.light} min={0} max={1} step={0.05} onChange={(v) => upd({ backdrop: { light: v } }, "Backdrop light")} />
+              </Row>
+              <Row label="Texture">
+                <Slider value={clip.backdrop.texture} min={0} max={1} step={0.05} onChange={(v) => upd({ backdrop: { texture: v } }, "Backdrop texture")} />
+              </Row>
+              <Row label="Focus height">
+                <Slider value={clip.backdrop.focus} min={0} max={1} step={0.01} onChange={(v) => upd({ backdrop: { focus: v } }, "Backdrop focus")} />
+              </Row>
+              <Row label="Seed">
+                <NumberField value={clip.backdrop.seed} min={0} step={1} onChange={(v) => upd({ backdrop: { seed: Math.round(v) } }, "Backdrop seed")} />
+              </Row>
+            </>
+          )}
         </Section>
       )}
       {clip.type === "scene" && (

@@ -4,6 +4,7 @@ import { lookSpec, normalizeEffectParams, transitionPresetSpec, EFFECT_TYPES, TR
 import { fail } from "./errors.js";
 import { cloneClip, makeAdjustmentClip, makeColorClip, makeMediaClip, makeSceneClip, makeTextClip, makeTrack, makeSceneObject } from "./factories.js";
 import { newId } from "./ids.js";
+import { BackdropSchema } from "./backdrop.js";
 import {
   AiPlanSchema,
   AssetSchema,
@@ -425,6 +426,7 @@ export const COMMANDS = {
         z.object({
           type: z.literal("color"),
           fill: HexColor,
+          backdrop: BackdropSchema.optional(),
           start: z.number().int().nonnegative(),
           duration: z.number().int().positive(),
           name: z.string().optional(),
@@ -618,7 +620,7 @@ export const COMMANDS = {
   }),
 
   "clip.update": def({
-    description: "Change clip properties: name, opacity, blendMode, transform, fades, speed, volume, text and style.",
+    description: "Change clip properties: name, opacity, blendMode, transform, fades, speed, volume, text and style, colour fill and backdrop.",
     params: z.object({
       clipId: IdSchema,
       props: z.object({
@@ -638,6 +640,8 @@ export const COMMANDS = {
         style: patchSchema(TextStyleSchema).optional(),
         animation: z.object({ in: z.enum(TEXT_ANIMATIONS), out: z.enum(TEXT_ANIMATIONS), duration: z.number().int().min(1).max(300) }).partial().optional(),
         fill: HexColor.optional(),
+        /** Card backdrop of a colour clip: a partial patch, or null to go back to the flat fill. */
+        backdrop: patchSchema(BackdropSchema).nullable().optional(),
         color: z.string().optional(),
       }),
     }),
@@ -683,6 +687,10 @@ export const COMMANDS = {
       if (props.fill !== undefined) {
         if (clip.type !== "color") return reject("fill");
         clip.fill = props.fill;
+      }
+      if (props.backdrop !== undefined) {
+        if (clip.type !== "color") return reject("backdrop");
+        clip.backdrop = props.backdrop === null ? undefined : BackdropSchema.parse({ ...clip.backdrop, ...props.backdrop });
       }
       return { clipId, duration: clip.duration };
     },
@@ -916,7 +924,7 @@ export const COMMANDS = {
       const beats = [...new Set(p.markers.filter((m) => kinds.includes(m.kind) && m.frame > o.start && m.frame < o.end).map((m) => m.frame))].sort((a, b) => a - b);
       if (!beats.length) fail("invalid_params", `No ${o.on} markers between frames ${o.start} and ${o.end}. Analyse the music first (beat markers).`);
       const cuts = [o.start, ...beats.filter((_, i) => (i + 1) % o.every === 0), o.end];
-      const look = o.look ? (lookSpec(o.look, p.looks as LookSpec[]) ?? fail("unsupported", `Unknown look ${o.look}`)) : undefined;
+      const look = o.look ? (lookSpec(o.look, p.looks as LookSpec[], p.settings) ?? fail("unsupported", `Unknown look ${o.look}`)) : undefined;
       const assets = o.assetIds.map((id) => {
         const a = findAsset(p as Project, id) ?? fail("missing_asset", `Asset ${id} not found`);
         if (a.kind !== "video" && a.kind !== "image") fail("invalid_params", `"${a.name}" is not a video or image`);

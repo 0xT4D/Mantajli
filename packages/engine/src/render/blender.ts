@@ -42,6 +42,21 @@ export interface SceneJobSpec {
  * to the scene, project format, quality or referenced files changes the key,
  * which invalidates the cached frames.
  */
+/**
+ * Ids are random per creation (newId), so the same scene rebuilt from a template, duplicated or
+ * re-created by a script would never match its cached frames. Hash with every id renamed by order of
+ * first appearance: identical content → identical key; any real change (a value, an object, an
+ * asset's bytes via `files`) still changes it.
+ */
+export function canonicalIds(json: string): string {
+  const ids = new Map<string, string>();
+  return json.replace(/\b[a-z]{2,8}_[0-9a-z]{10}\b/g, (id) => {
+    let c = ids.get(id);
+    if (!c) ids.set(id, (c = `#${ids.size}`));
+    return c;
+  });
+}
+
 export function sceneRenderKey(spec: SceneJobSpec): string {
   const { scene, project } = spec;
   const files: Record<string, string> = {};
@@ -54,8 +69,8 @@ export function sceneRenderKey(spec: SceneJobSpec): string {
   }
   const { name: _name, ...pixels } = scene;
   return sha1(
-    JSON.stringify({
-      v: 2,
+    canonicalIds(JSON.stringify({
+      v: 3,
       script: blenderScriptVersion(),
       pixels,
       w: project.settings.width,
@@ -65,7 +80,7 @@ export function sceneRenderKey(spec: SceneJobSpec): string {
       s: spec.resolutionScale,
       files,
       font: spec.defaultFont,
-    }),
+    })),
   ).slice(0, 16);
 }
 

@@ -23,7 +23,7 @@ function graphFor(text: string) {
     mediaPath: (a) => a.path,
     sceneFrames: () => undefined,
     fontFile: () => "C:/Windows/Fonts/arialbd.ttf",
-    writeFile: (n, c) => (files[n] = c),
+    writeFile: (n, c) => (files[n] = typeof c === "string" ? c : "<binary>"),
     includeAudio: true,
     output: "video",
   });

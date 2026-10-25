@@ -1,18 +1,19 @@
 /**
- * Text-to-speech providers behind one interface. Local engines run on this machine:
- * Windows SAPI (System.Speech, the voices installed in Windows), eSpeak NG, and FFmpeg's flite
- * filter (when FFmpeg is built with libflite). Cloud engines (OpenAI, ElevenLabs) are used only
- * when their API key is set in the engine's environment; the script text is then sent to that
- * provider. Keys never reach the UI.
+ * Text-to-speech providers behind one interface. Local engines run on this machine: Piper
+ * (neural, with a voice model the user installs), Windows SAPI (System.Speech, the voices installed
+ * in Windows), RHVoice and SVOX Pico (statistical / unit-based), FFmpeg's flite filter and eSpeak NG
+ * (formant: intelligible but robotic). Cloud engines (OpenAI, ElevenLabs) are used only when their
+ * API key is set in the engine's environment and the user names them; the script text is then sent
+ * to that provider. Keys never reach the UI.
  *
  * Every provider writes a WAV; `finishSpeech` then trims the silence around it, converts to
  * 48 kHz stereo and levels it for dialogue (-16 LUFS), so all voices sit alike in the mix.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fail, MantagliError } from "@mantagli/core";
-import { findOnPath } from "../config.js";
+import { appDataDir, findOnPath } from "../config.js";
 import { runFfmpeg } from "../media/ffmpeg.js";
 import { run } from "../util/proc.js";
 
@@ -21,7 +22,16 @@ export interface TtsVoice {
   name: string;
   language?: string;
   gender?: string;
+  /** Licence of the voice data when it limits use (e.g. non-commercial). */
+  license?: string;
 }
+
+/**
+ * How the engine makes speech, the main predictor of how natural it sounds:
+ * neural (Piper, cloud) > parametric (HMM / unit selection: RHVoice, Pico, most Windows voices) >
+ * formant (eSpeak, flite's diphone voice: intelligible, clearly synthetic).
+ */
+export type TtsQuality = "neural" | "parametric" | "formant";
 
 export interface TtsRequest {
   text: string;
@@ -38,6 +48,9 @@ export interface TtsProvider {
   id: TtsProviderId;
   label: string;
   kind: "local" | "cloud";
+  quality: TtsQuality;
+  /** Licence of the engine (voices may add their own, see TtsVoice.license). */
+  license: string;
   /** Whether it can run here, and why not. */
   status(): Promise<{ available: boolean; reason?: string }>;
   voices(): Promise<TtsVoice[]>;
@@ -45,7 +58,7 @@ export interface TtsProvider {
   synthesize(req: TtsRequest, out: string, signal?: AbortSignal): Promise<void>;
 }
 
-export const TTS_PROVIDER_IDS = ["sapi", "espeak", "flite", "openai", "elevenlabs"] as const;
+export const TTS_PROVIDER_IDS = ["piper", "sapi", "rhvoice", "pico", "flite", "espeak", "openai", "elevenlabs"] as const;
 export type TtsProviderId = (typeof TTS_PROVIDER_IDS)[number];
 
 const clampRate = (r?: number) => Math.min(2, Math.max(0.5, r ?? 1));
@@ -86,6 +99,8 @@ const sapi: TtsProvider = {
   id: "sapi",
   label: "Windows voices (SAPI, local)",
   kind: "local",
+  quality: "parametric",
+  license: "Windows (voices installed with the OS)",
   async status() {
     return process.platform === "win32" ? { available: true } : { available: false, reason: "Windows only" };
   },
@@ -129,6 +144,8 @@ const espeakProvider: TtsProvider = {
   id: "espeak",
   label: "eSpeak NG (local, robotic)",
   kind: "local",
+  quality: "formant",
+  license: "GPL-3.0 (engine and voices)",
   async status() {
     return (await espeak()) ? { available: true } : { available: false, reason: "espeak-ng is not installed" };
   },
@@ -175,6 +192,8 @@ function fliteProvider(ffmpeg: string): TtsProvider {
     id: "flite",
     label: "Flite via FFmpeg (local, robotic)",
     kind: "local",
+    quality: "formant",
+    license: "BSD-style (CMU Flite)",
     async status() {
       return (await fliteAvailable(ffmpeg)) ? { available: true } : { available: false, reason: "this FFmpeg build has no flite filter" };
     },
@@ -194,6 +213,178 @@ function fliteProvider(ffmpeg: string): TtsProvider {
   };
 }
 
+// ------------------------------------------------------------------ shared: tempo for engines without a usable rate control
+
+/** Speak at the engine's natural speed into `raw`, then change tempo (not pitch) to `rate` into `out`. */
+async function withTempo(ffmpeg: string, rate: number | undefined, out: string, signal: AbortSignal | undefined, speak: (file: string) => Promise<void>): Promise<void> {
+  const r = clampRate(rate);
+  if (r === 1) return speak(out);
+  await withTemp(async (dir) => {
+    const raw = path.join(dir, "raw.wav");
+    await speak(raw);
+    await runFfmpeg(ffmpeg, ["-i", raw, "-af", `atempo=${r}`, out], { signal, timeoutMs: 120000 });
+  });
+}
+
+// ------------------------------------------------------------------ RHVoice
+
+const RHVOICE_DIRS = ["/usr/share/RHVoice/voices", "/usr/local/share/RHVoice/voices"];
+/** Voices whose data is licensed non-commercial / no-derivatives (Debian rhvoice copyright file). */
+const RHVOICE_RESTRICTED: Record<string, string> = {
+  "evgeniy-eng": "CC BY-NC-ND 4.0 (non-commercial)",
+  lyubov: "CC BY-NC-ND 4.0 (non-commercial)",
+  arina: "CC BY-NC-ND 4.0 (non-commercial)",
+  artemiy: "CC BY-NC-ND 4.0 (non-commercial)",
+  hana: "CC BY-NC-SA 4.0 (non-commercial)",
+  magda: "CC BY-NC-ND 4.0 (non-commercial)",
+  mikhail: "CC BY-NC-ND 4.0 (non-commercial)",
+  natan: "CC BY-NC-ND 4.0 (non-commercial)",
+  pavel: "CC BY-NC-ND 4.0 (non-commercial)",
+  suze: "CC BY-NC-ND 4.0 (non-commercial)",
+  tatiana: "CC BY-NC-ND 4.0 (non-commercial)",
+  victoria: "CC BY-NC-ND 4.0 (non-commercial)",
+  vitaliy: "CC BY-NC-ND 4.0 (non-commercial)",
+  yuriy: "CC BY-NC-ND 4.0 (non-commercial)",
+  marianna: "CC BY-ND 4.0",
+  volodymyr: "CC BY-ND 4.0",
+};
+
+let rhvoiceBin: string | null | undefined;
+async function rhvoice(): Promise<string | undefined> {
+  if (rhvoiceBin === undefined) rhvoiceBin = (await findOnPath("RHVoice-test")) ?? null;
+  return rhvoiceBin ?? undefined;
+}
+
+async function rhvoiceVoices(): Promise<TtsVoice[]> {
+  const out: TtsVoice[] = [];
+  for (const dir of RHVOICE_DIRS) {
+    const names = await readdir(dir).catch(() => [] as string[]);
+    for (const id of names) {
+      const info = await readFile(path.join(dir, id, "voice.info"), "utf8").catch(() => "");
+      const field = (k: string) => new RegExp(`^${k}=(.*)$`, "m").exec(info)?.[1]?.trim();
+      if (!info || out.some((v) => v.id === id)) continue;
+      const language = field("language");
+      out.push({ id, name: `${field("name") ?? id} (${language ?? "?"}, ${field("gender") ?? "?"})`, language: language?.toLowerCase(), gender: field("gender"), ...(RHVOICE_RESTRICTED[id] ? { license: RHVOICE_RESTRICTED[id] } : {}) });
+    }
+  }
+  return out;
+}
+
+function rhvoiceProvider(ffmpeg: string): TtsProvider {
+  return {
+    id: "rhvoice",
+    label: "RHVoice (local, statistical)",
+    kind: "local",
+    quality: "parametric",
+    license: "LGPL-2.1 (engine; English voices alan, bdl, clb, slt LGPL — some voices are non-commercial)",
+    async status() {
+      if (!(await rhvoice())) return { available: false, reason: "RHVoice is not installed (apt install rhvoice rhvoice-english)" };
+      return (await rhvoiceVoices()).length ? { available: true } : { available: false, reason: "no RHVoice voices installed" };
+    },
+    voices: rhvoiceVoices,
+    async synthesize(req, out, signal) {
+      const bin = (await rhvoice()) ?? fail("dependency_unavailable", "RHVoice is not installed");
+      const voices = await rhvoiceVoices();
+      const voice = voices.find((v) => v.id === req.voice)?.id ?? voices.find((v) => v.id === "slt")?.id ?? voices[0]?.id ?? fail("dependency_unavailable", "no RHVoice voices installed");
+      await withTempo(ffmpeg, req.rate, out, signal, async (file) => {
+        const r = await run(bin, ["-p", voice, "-o", file], { stdin: req.text, timeoutMs: 120000, signal });
+        if (r.code !== 0) fail("dependency_unavailable", `RHVoice failed: ${r.stderr.trim().slice(-300)}`);
+      });
+    },
+  };
+}
+
+// ------------------------------------------------------------------ SVOX Pico
+
+const PICO_VOICES: TtsVoice[] = [
+  { id: "en-US", name: "English (US, female)", language: "en-us", gender: "female" },
+  { id: "en-GB", name: "English (UK, female)", language: "en-gb", gender: "female" },
+  { id: "de-DE", name: "German (female)", language: "de", gender: "female" },
+  { id: "es-ES", name: "Spanish (female)", language: "es", gender: "female" },
+  { id: "fr-FR", name: "French (female)", language: "fr", gender: "female" },
+  { id: "it-IT", name: "Italian (female)", language: "it", gender: "female" },
+];
+
+let picoBin: string | null | undefined;
+async function pico(): Promise<string | undefined> {
+  if (picoBin === undefined) picoBin = (await findOnPath("pico2wave")) ?? null;
+  return picoBin ?? undefined;
+}
+
+function picoProvider(ffmpeg: string): TtsProvider {
+  return {
+    id: "pico",
+    label: "SVOX Pico (local, 6 languages)",
+    kind: "local",
+    quality: "parametric",
+    license: "Apache-2.0",
+    async status() {
+      return (await pico()) ? { available: true } : { available: false, reason: "pico2wave is not installed (apt install libttspico-utils)" };
+    },
+    async voices() {
+      return (await pico()) ? PICO_VOICES : [];
+    },
+    async synthesize(req, out, signal) {
+      const bin = (await pico()) ?? fail("dependency_unavailable", "pico2wave is not installed");
+      const lang = PICO_VOICES.find((v) => v.id.toLowerCase() === (req.voice ?? "").toLowerCase())?.id ?? "en-US";
+      await withTempo(ffmpeg, req.rate, out, signal, async (file) => {
+        // The text is one argv entry (no shell); pico2wave needs a .wav name.
+        const r = await run(bin, [`--lang=${lang}`, `--wave=${file}`, "--", req.text], { timeoutMs: 120000, signal });
+        if (r.code !== 0) fail("dependency_unavailable", `pico2wave failed: ${r.stderr.trim().slice(-300)}`);
+      });
+    },
+  };
+}
+
+// ------------------------------------------------------------------ Piper (neural, user-installed voice models)
+
+/** Piper voice models (*.onnx with their .onnx.json) live here: MANTAGLI_PIPER_VOICES or <app data>/voices/piper. */
+export function piperVoiceDir(): string {
+  return process.env.MANTAGLI_PIPER_VOICES ?? path.join(appDataDir(), "voices", "piper");
+}
+
+let piperBin: string | null | undefined;
+async function piper(): Promise<string | undefined> {
+  if (process.env.MANTAGLI_PIPER) return process.env.MANTAGLI_PIPER;
+  if (piperBin === undefined) piperBin = (await findOnPath("piper")) ?? null;
+  return piperBin ?? undefined;
+}
+
+async function piperVoices(): Promise<TtsVoice[]> {
+  const dir = piperVoiceDir();
+  const files = (await readdir(dir).catch(() => [] as string[])).filter((f) => f.endsWith(".onnx")).sort();
+  const out: TtsVoice[] = [];
+  for (const f of files) {
+    const cfg = await readFile(path.join(dir, `${f}.json`), "utf8").then((t) => JSON.parse(t) as { language?: { code?: string }; dataset?: string }, () => undefined);
+    out.push({ id: f.replace(/\.onnx$/, ""), name: f.replace(/\.onnx$/, ""), language: cfg?.language?.code?.toLowerCase().replace("_", "-") });
+  }
+  return out;
+}
+
+function piperProvider(): TtsProvider {
+  return {
+    id: "piper",
+    label: "Piper (local, neural)",
+    kind: "local",
+    quality: "neural",
+    license: "Piper engine GPL-3.0 (run as a separate program); each voice model has its own licence (see its model card)",
+    async status() {
+      if (!(await piper())) return { available: false, reason: "Piper is not installed (pip install piper-tts, or set MANTAGLI_PIPER)" };
+      return (await piperVoices()).length ? { available: true } : { available: false, reason: `no Piper voice models (*.onnx + .onnx.json) in ${piperVoiceDir()}` };
+    },
+    voices: piperVoices,
+    async synthesize(req, out, signal) {
+      const bin = (await piper()) ?? fail("dependency_unavailable", "Piper is not installed");
+      const voices = await piperVoices();
+      const voice = voices.find((v) => v.id === req.voice) ?? voices[0] ?? fail("dependency_unavailable", `no Piper voice models in ${piperVoiceDir()}`);
+      // length_scale > 1 is slower: the model's own timing, not a tempo effect.
+      const args = ["--model", path.join(piperVoiceDir(), `${voice.id}.onnx`), "--output_file", out, "--length_scale", (1 / clampRate(req.rate)).toFixed(3)];
+      const r = await run(bin, args, { stdin: req.text, timeoutMs: 300000, signal });
+      if (r.code !== 0) fail("dependency_unavailable", `Piper failed: ${r.stderr.trim().slice(-300)}`);
+    },
+  };
+}
+
 // ------------------------------------------------------------------ cloud providers
 
 const OPENAI_VOICES = ["alloy", "ash", "ballad", "coral", "echo", "fable", "nova", "onyx", "sage", "shimmer", "verse"];
@@ -209,6 +400,8 @@ const openai: TtsProvider = {
   id: "openai",
   label: "OpenAI TTS (cloud, needs OPENAI_API_KEY)",
   kind: "cloud",
+  quality: "neural",
+  license: "OpenAI terms (disclose AI-generated voice)",
   async status() {
     return process.env.OPENAI_API_KEY ? { available: true } : { available: false, reason: "set OPENAI_API_KEY in the engine's environment" };
   },
@@ -240,6 +433,8 @@ const elevenlabs: TtsProvider = {
   id: "elevenlabs",
   label: "ElevenLabs (cloud, needs ELEVENLABS_API_KEY)",
   kind: "cloud",
+  quality: "neural",
+  license: "ElevenLabs terms (plan decides commercial use)",
   async status() {
     return process.env.ELEVENLABS_API_KEY ? { available: true } : { available: false, reason: "set ELEVENLABS_API_KEY in the engine's environment" };
   },
@@ -287,12 +482,15 @@ export function pcmWav(pcm: Buffer, rate: number, channels: number): Buffer {
   return Buffer.concat([h, pcm]);
 }
 
+/** Every provider, local ones first, each group ordered by expected naturalness (TtsQuality). */
 export function ttsProviders(ffmpeg: string): TtsProvider[] {
-  return [sapi, espeakProvider, fliteProvider(ffmpeg), openai, elevenlabs];
+  return [piperProvider(), sapi, rhvoiceProvider(ffmpeg), picoProvider(ffmpeg), fliteProvider(ffmpeg), espeakProvider, openai, elevenlabs];
 }
 
-/** First available provider, local ones first. */
-/** The first available local provider. Cloud providers are never a default: script text leaves the machine only when one is named. */
+/**
+ * The most natural available local provider. Cloud providers are never a default: script text
+ * leaves the machine only when one is named.
+ */
 export async function defaultTtsProvider(ffmpeg: string): Promise<TtsProvider | undefined> {
   for (const p of ttsProviders(ffmpeg)) if (p.kind === "local" && (await p.status()).available) return p;
   return undefined;

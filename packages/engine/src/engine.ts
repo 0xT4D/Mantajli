@@ -495,7 +495,8 @@ export class Engine extends EventEmitter {
     const s = this.requireSession();
     const scene = findScene(s.project, sceneId) ?? fail("not_found", `Scene ${sceneId} not found`);
     const key = sceneRenderKey({ project: s.project, scene, quality, resolutionScale: scale, defaultFont: this.default3dFont });
-    return { dir: s.cacheDir("scenes", sceneId, key), key };
+    // Content-addressed: scenes with identical content (duplicates, rebuilt projects) share frames.
+    return { dir: s.cacheDir("scenes", key), key };
   }
 
   /** Render (or reuse cached) frames of a scene. Frames are 1-based scene frames. */

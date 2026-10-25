@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { CAPTION_STYLES, fpsValue, MUSIC_MOOD_LABELS, MUSIC_MOODS, MUSIC_STYLE_SPECS, MUSIC_STYLES, projectDuration, type CaptionStyle, type MusicMood, type MusicStyle } from "@mantagli/core";
 import { engine } from "../engine/client";
 import { useStudio } from "../store/studio";
-import { Button, Dialog, NumberField, Row, Select, TextField } from "./ui";
+import { Button, cx, Dialog, NumberField, Row, Select, TextField } from "./ui";
 
 type ToolResult<T> = { ok: boolean; data?: T; error?: { message: string } };
 
@@ -112,7 +112,17 @@ function defaultVoice(voices: { id: string; name: string; language?: string }[])
   return (pick(lang) ?? pick("en-us") ?? voices[0])?.id ?? "";
 }
 
-type Provider = { id: string; label: string; kind: "local" | "cloud"; available: boolean; reason?: string; voices: { id: string; name: string; language?: string }[] };
+type Provider = {
+  id: string;
+  label: string;
+  kind: "local" | "cloud";
+  quality: "neural" | "parametric" | "formant";
+  license: string;
+  available: boolean;
+  reason?: string;
+  voices: { id: string; name: string; language?: string; license?: string }[];
+};
+const QUALITY_LABEL = { neural: "neural — most natural", parametric: "statistical — natural-ish", formant: "formant — robotic" } as const;
 type SegmentOut = { text: string; start?: number; frames?: number; seconds?: number; path?: string };
 
 /**
@@ -132,6 +142,7 @@ export function VoiceDialog() {
   const [captions, setCaptions] = useState<"none" | CaptionStyle>("clean");
   const [busy, setBusy] = useState("");
   const [result, setResult] = useState<{ kind: "estimate" | "preview"; segments: SegmentOut[] } | null>(null);
+  const [compare, setCompare] = useState<{ provider: Provider; path?: string; error?: string }[] | null>(null);
   useEffect(() => {
     void call<ToolResult<{ providers: Provider[] }>>("tools.call", { name: "voice_providers", input: {} }).then((r) => {
       const list = r.data?.providers ?? [];
@@ -167,6 +178,23 @@ export function VoiceDialog() {
     setDialog(null);
   };
 
+  /** The first segment spoken by every available local engine (nothing leaves the computer), to choose by ear. */
+  const compareLocal = async () => {
+    const local = (providers ?? []).filter((x) => x.kind === "local" && x.available);
+    if (!segments.length || !local.length) return;
+    setBusy("compare");
+    const out: { provider: Provider; path?: string; error?: string }[] = [];
+    for (const x of local) {
+      const r = await call<ToolResult<{ segments: SegmentOut[] }>>("tools.call", {
+        name: "voice_narrate",
+        input: { segments: segments.slice(0, 1), provider: x.id, voice: defaultVoice(x.voices) || undefined, rate, place: false, captions: false },
+      }).catch(() => null);
+      out.push(r?.ok && r.data?.segments[0]?.path ? { provider: x, path: r.data.segments[0].path } : { provider: x, error: r?.error?.message ?? "failed" });
+      setCompare([...out]);
+    }
+    setBusy("");
+  };
+
   return (
     <Dialog
       title="Voice-over"
@@ -175,6 +203,9 @@ export function VoiceDialog() {
       footer={
         <>
           <Button onClick={() => setDialog(null)}>Cancel</Button>
+          <Button disabled={!segments.length || !!busy} title="Speak the first segment with every local engine installed here" onClick={() => void compareLocal()}>
+            {busy === "compare" ? "Comparing…" : "Compare engines"}
+          </Button>
           <Button disabled={!segments.length || !!busy} onClick={() => void run("estimate")}>
             {busy === "estimate" ? "Estimating…" : "Estimate timing"}
           </Button>
@@ -200,8 +231,17 @@ export function VoiceDialog() {
           />
         </Row>
         {current && (
+          <div className="text-[10px] text-mute">
+            {QUALITY_LABEL[current.quality]} · {current.license}
+          </div>
+        )}
+        {current && (
           <Row label="Voice">
-            {current.voices.length ? <Select value={voice} onChange={setVoice} options={current.voices.map((v) => ({ value: v.id, label: v.name }))} /> : <TextField value={voice} onCommit={setVoice} placeholder="voice id" />}
+            {current.voices.length ? (
+              <Select value={voice} onChange={setVoice} options={current.voices.map((v) => ({ value: v.id, label: v.license ? `${v.name} — ${v.license}` : v.name }))} />
+            ) : (
+              <TextField value={voice} onCommit={setVoice} placeholder="voice id" />
+            )}
           </Row>
         )}
         <Row label="Speed">
@@ -212,6 +252,26 @@ export function VoiceDialog() {
           <Row label="Delivery" title="Direction for engines that take it (OpenAI), e.g. calm documentary narrator">
             <TextField value={style} onCommit={setStyle} placeholder="e.g. cinematic trailer narrator, low and calm" />
           </Row>
+        )}
+        {compare && (
+          <div className="space-y-1 rounded border border-line p-2 text-[11px]" data-testid="voice-compare">
+            {compare.map((c) => (
+              <div key={c.provider.id} className="flex items-center gap-2">
+                <button
+                  className={cx("w-40 shrink-0 truncate text-left", c.provider.id === provider ? "text-accent" : "text-dim hover:text-fg")}
+                  title="Use this engine"
+                  onClick={() => {
+                    setProvider(c.provider.id);
+                    setVoice(defaultVoice(c.provider.voices));
+                  }}
+                >
+                  {c.provider.label.replace(/ \(.*\)$/, "")} <span className="text-mute">· {c.provider.quality}</span>
+                </button>
+                {c.path ? <audio src={engine.fileUrl(c.path, Date.now())} controls className="h-7 flex-1" /> : <span className="text-warn">{c.error}</span>}
+              </div>
+            ))}
+            {busy === "compare" && <div className="text-mute">Speaking…</div>}
+          </div>
         )}
         {result && (
           <div className="space-y-1 rounded border border-line p-2 text-[11px]">

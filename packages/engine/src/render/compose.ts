@@ -44,8 +44,9 @@ export async function compose(opts: ComposeOptions): Promise<{ outPath: string; 
     includeAudio: opts.includeAudio ?? opts.output === "video",
     loudnessLufs: opts.loudnessLufs,
     loudnessGainDb: opts.loudnessGainDb,
+    draft: opts.draft,
     output: opts.output,
-    writeFile: (name, content) => void pending.push(writeFile(path.join(workDir, name), content, "utf8")),
+    writeFile: (name, content) => void pending.push(typeof content === "string" ? writeFile(path.join(workDir, name), content, "utf8") : writeFile(path.join(workDir, name), content)),
   });
   await Promise.all(pending);
   await writeFile(path.join(workDir, "graph.txt"), graph.filter, "utf8");

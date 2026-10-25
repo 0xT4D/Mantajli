@@ -20,6 +20,9 @@ import {
   transitionFx,
   transitionMask,
   vignetteFactor,
+  backdropKey,
+  hasBackdrop,
+  renderBackdrop,
   type Asset,
   type BlendMode,
   type Clip,
@@ -182,8 +185,11 @@ export class LiveCompositor {
       if (clip.type === "color") {
         ctx.scale(st.scale, st.scale);
         if (mask) clipMask(ctx, mask, W, H);
-        ctx.fillStyle = clip.fill;
-        ctx.fillRect(-W / 2, -H / 2, W, H);
+        if (hasBackdrop(clip.backdrop)) ctx.drawImage(this.backdropCanvas(clip.fill, clip.backdrop, W, H), -W / 2, -H / 2, W, H);
+        else {
+          ctx.fillStyle = clip.fill;
+          ctx.fillRect(-W / 2, -H / 2, W, H);
+        }
       } else if (clip.type === "text") {
         ctx.scale(st.scale, st.scale);
         if (mask) clipMask(ctx, mask, W, H);
@@ -403,6 +409,23 @@ export class LiveCompositor {
       g.putImageData(img, 0, 0);
       if (this.vignettes.size > 8) this.vignettes.clear();
       this.vignettes.set(key, c);
+    }
+    return c;
+  }
+
+  private backdrops = new Map<string, HTMLCanvasElement>();
+  /** Card backdrop from the same core rasterizer as the export (at most 1280 px on the long side, scaled up). */
+  private backdropCanvas(fill: string, b: Parameters<typeof renderBackdrop>[1], W: number, H: number): HTMLCanvasElement {
+    const f = Math.min(1, 1280 / Math.max(W, H));
+    const [bw, bh] = [Math.max(1, Math.round(W * f)), Math.max(1, Math.round(H * f))];
+    const key = backdropKey(fill, b, bw, bh);
+    let c = this.backdrops.get(key);
+    if (!c) {
+      c = document.createElement("canvas");
+      [c.width, c.height] = [bw, bh];
+      c.getContext("2d")!.putImageData(new ImageData(renderBackdrop(fill, b, bw, bh) as Uint8ClampedArray<ArrayBuffer>, bw, bh), 0, 0);
+      if (this.backdrops.size > 8) this.backdrops.clear();
+      this.backdrops.set(key, c);
     }
     return c;
   }

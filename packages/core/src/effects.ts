@@ -519,8 +519,39 @@ export const LOOKS: LookSpec[] = [
   },
 ];
 
-export function lookSpec(id: string, saved: readonly LookSpec[] = []): LookSpec | undefined {
-  return LOOKS.find((l) => l.id === id) ?? saved.find((l) => l.id === id);
+/** Built-in looks are authored for a frame whose short side is this many pixels. */
+export const LOOK_REFERENCE_SIZE = 1080;
+
+/**
+ * A built-in look for a frame of `size`: pixel-unit params (fringe offset, scanline spacing, glow and
+ * blur radii, including ones left at their defaults) scale with the frame's short side, so the look
+ * reads the same on a 540-wide draft project and a 4K one. Rounded to the param's step, kept in range.
+ */
+export function scaleLookToFrame(look: LookSpec, size: { width: number; height: number }): LookSpec {
+  const f = Math.min(size.width, size.height) / LOOK_REFERENCE_SIZE;
+  if (!(f > 0) || Math.abs(f - 1) < 1e-6) return look;
+  return {
+    ...look,
+    effects: look.effects.map((e) => {
+      const params = { ...e.params };
+      for (const def of effectSpec(e.type)?.params ?? []) {
+        if (def.kind !== "number" || def.unit !== "px") continue;
+        const v = typeof params[def.key] === "number" ? (params[def.key] as number) : def.default;
+        params[def.key] = Math.min(def.max, Math.max(def.min, Math.round((v * f) / def.step) * def.step));
+      }
+      return { ...e, params };
+    }),
+  };
+}
+
+/**
+ * A look by id: built-in (scaled to `size` when given, see scaleLookToFrame) or saved in the project
+ * (kept as saved: it was captured in that project's own pixels).
+ */
+export function lookSpec(id: string, saved: readonly LookSpec[] = [], size?: { width: number; height: number }): LookSpec | undefined {
+  const builtIn = LOOKS.find((l) => l.id === id);
+  if (builtIn) return size ? scaleLookToFrame(builtIn, size) : builtIn;
+  return saved.find((l) => l.id === id);
 }
 
 /** Line height (× font size) for 2D text, shared by export and live preview. */

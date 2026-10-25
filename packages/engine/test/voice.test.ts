@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, rm } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -90,7 +90,7 @@ describe("voice-over workflow (local engine)", () => {
       expect(asset.tags).toContain(`tts:${local.id}`);
       expect(seg.frames).toBe(Math.round(asset.meta.duration! * 30));
       expect(asset.meta.duration!).toBeGreaterThan(0.8);
-      expect(maxVolume(asset.path)).toBeGreaterThan(-6); // levelled speech, not silence
+      expect(maxVolume(asset.path)).toBeGreaterThan(-20); // speech, not silence (its level is asserted as LUFS above; peaks vary by engine)
       // Captions cover the segment exactly.
       const caps = s.project.tracks.find((t) => t.id === data.captionTrackId)!.clips.filter((c) => c.start >= seg.start && c.start < seg.start + seg.frames);
       expect(caps.length).toBe(seg.captions);
@@ -175,5 +175,78 @@ describe("cloud voice providers (against a local mock of their APIs)", () => {
     expect(denied.ok).toBe(false);
     expect(denied.error?.category).toBe("permission_denied");
     expect(denied.error?.message).toMatch(/401/);
+  }, 120_000);
+});
+
+describe("more natural local engines", () => {
+  const lufs = (file: string) => {
+    const m = spawnSync("ffmpeg", ["-hide_banner", "-nostats", "-i", file, "-af", "ebur128", "-f", "null", "-"], { encoding: "utf8" }).stderr;
+    return Number(/I:\s*(-?[\d.]+) LUFS/.exec(m.slice(m.lastIndexOf("Summary:")))![1]);
+  };
+
+  it("RHVoice and SVOX Pico narrate, level, follow the rate and rank above the formant engines", async () => {
+    const providers = ((await tool("voice_providers", {})).data as { providers: { id: string; kind: string; quality: string; license: string; available: boolean; voices: { id: string; license?: string }[] }[] }).providers;
+    // Most natural first among local engines; every provider states its quality class and licence.
+    const order = providers.filter((p) => p.kind === "local").map((p) => p.quality);
+    const rank = { neural: 0, parametric: 1, formant: 2 } as const;
+    for (let k = 1; k < order.length; k++) expect(rank[order[k] as keyof typeof rank]).toBeGreaterThanOrEqual(rank[order[k - 1] as keyof typeof rank]);
+    expect(providers.every((p) => p.license.length > 0)).toBe(true);
+    const usable = providers.filter((p) => (p.id === "rhvoice" || p.id === "pico") && p.available);
+    if (!usable.length) return; // neither engine installed on this machine
+    const best = await defaultTtsProvider(engine.ffmpeg);
+    expect(best?.quality).not.toBe("formant"); // a parametric engine is preferred over eSpeak / flite
+    // Non-commercial RHVoice voices are labelled as such.
+    const rh = providers.find((p) => p.id === "rhvoice");
+    if (rh?.voices.some((v) => v.id === "evgeniy-eng")) expect(rh.voices.find((v) => v.id === "evgeniy-eng")!.license).toMatch(/non-commercial/);
+
+    await engine.createProject({ name: "Local voices", format: "vertical", parentDir: ROOT });
+    const s = engine.requireSession();
+    let start = 0;
+    for (const p of usable) {
+      const text = `The arena opens again, spoken by ${p.id}.`;
+      const normal = await tool("voice_narrate", { segments: [{ text }], provider: p.id, start, captions: true, duck: false });
+      expect(normal.ok, JSON.stringify(normal.error)).toBe(true);
+      const seg = (normal.data as { segments: { assetId: string; frames: number; captions: number }[] }).segments[0]!;
+      expect(seg.captions).toBeGreaterThanOrEqual(1);
+      const file = s.project.assets.find((a) => a.id === seg.assetId)!.path;
+      expect(Math.abs(lufs(file) + 16), `${p.id} level`).toBeLessThan(1);
+      const fast = await tool("voice_narrate", { segments: [{ text }], provider: p.id, rate: 1.4, start: start + seg.frames + 30, captions: false, duck: false });
+      expect(fast.ok, JSON.stringify(fast.error)).toBe(true);
+      const fastFrames = (fast.data as { segments: { frames: number }[] }).segments[0]!.frames;
+      expect(fastFrames / seg.frames, `${p.id} rate`).toBeLessThan(0.85);
+      start += seg.frames + fastFrames + 90;
+    }
+  }, 180_000);
+
+  it("Piper: finds user-installed voice models and runs the documented command (stand-in executable)", async () => {
+    // No Piper voice model can be downloaded in this environment: a stand-in records its arguments and
+    // stdin and writes a tone, so this checks discovery and the command line, not Piper's audio.
+    const dir = path.join(ROOT, "piper");
+    await mkdir(path.join(dir, "voices"), { recursive: true });
+    await writeFile(path.join(dir, "voices", "en_US-test-medium.onnx"), "model");
+    await writeFile(path.join(dir, "voices", "en_US-test-medium.onnx.json"), JSON.stringify({ language: { code: "en_US" } }));
+    const log = path.join(dir, "calls.log");
+    const fake = path.join(dir, "piper");
+    await writeFile(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> "${log}"\ncat >> "${log}"\nprintf '\\n' >> "${log}"\nout=""\nwhile [ $# -gt 0 ]; do [ "$1" = "--output_file" ] && out="$2"; shift; done\nffmpeg -v error -y -f lavfi -i "sine=f=220:d=1.2" -ar 22050 "$out"\n`);
+    await chmod(fake, 0o755);
+    process.env.MANTAGLI_PIPER = fake;
+    process.env.MANTAGLI_PIPER_VOICES = path.join(dir, "voices");
+    try {
+      const { ttsProviders } = await import("../src/voice/tts.js");
+      const p = ttsProviders(engine.ffmpeg).find((x) => x.id === "piper")!;
+      expect(await p.status()).toEqual({ available: true });
+      expect(await p.voices()).toEqual([{ id: "en_US-test-medium", name: "en_US-test-medium", language: "en-us" }]);
+      await engine.createProject({ name: "Piper", format: "vertical", parentDir: ROOT });
+      const r = await tool("voice_narrate", { segments: [{ text: "Season seven; join us." }], provider: "piper", rate: 1.25, captions: false });
+      expect(r.ok, JSON.stringify(r.error)).toBe(true);
+      const calls = await readFile(log, "utf8");
+      expect(calls).toContain(`--model ${path.join(dir, "voices", "en_US-test-medium.onnx")}`);
+      expect(calls).toContain("--length_scale 0.800");
+      expect(calls).toContain("Season seven; join us."); // text on stdin, never on the command line
+      expect(calls.split("\n")[0]).not.toContain("Season");
+    } finally {
+      delete process.env.MANTAGLI_PIPER;
+      delete process.env.MANTAGLI_PIPER_VOICES;
+    }
   }, 120_000);
 });

@@ -25,6 +25,8 @@ import {
   RENDER_PRESET_IDS,
   BLEND_MODES,
   LOOKS,
+  BACKDROP_STYLES,
+  BackdropSchema,
   TRANSITION_PRESETS,
   MATERIAL_PRESETS,
   MESH_PRIMITIVES,
@@ -374,7 +376,7 @@ export const TOOLS: ToolDef[] = [
   tool({
     name: "timeline_add_clip",
     description:
-      "Place a clip. type=media (assetId, optional sourceIn seconds, speed, duration frames - defaults to remaining source or 3 s for images), type=text (text, duration, style incl. fontAssetId of an imported font, animation), type=scene (sceneId), type=color (fill), type=adjustment (duration; its effects apply to everything below it - use for whole-frame looks like crtMonitor, lens distortion, shake). Optional transform {x, y (pixels from frame centre), scale, rotation, fit} and name. mode=overwrite clears what is underneath; mode=error refuses overlaps.",
+      `Place a clip. type=media (assetId, optional sourceIn seconds, speed, duration frames - defaults to remaining source or 3 s for images), type=text (text, duration, style incl. fontAssetId of an imported font, animation), type=scene (sceneId), type=color (fill, optional backdrop {style: ${BACKDROP_STYLES.join("|")}, accent, light 0-1, texture 0-1, focus 0-1 (height of the light/horizon), seed} for lit, textured title cards), type=adjustment (duration; its effects apply to everything below it - use for whole-frame looks like crtMonitor, lens distortion, shake). Optional transform {x, y (pixels from frame centre), scale, rotation, fit} and name. mode=overwrite clears what is underneath; mode=error refuses overlaps.`,
     input: z.object({
       trackId: Id,
       type: z.enum(["media", "text", "scene", "color", "adjustment"]),
@@ -386,6 +388,7 @@ export const TOOLS: ToolDef[] = [
       speed: z.number().min(0.1).max(16).optional(),
       text: z.string().max(2000).optional(),
       fill: Hex.optional(),
+      backdrop: BackdropSchema.optional(),
       style: z
         .object({ fontFamily: z.string(), fontAssetId: Id, bold: z.boolean(), fontSize: z.number(), color: Hex, align: z.enum(["left", "center", "right"]), strokeWidth: z.number(), strokeColor: Hex, shadow: z.boolean(), box: z.boolean(), boxColor: Hex, boxOpacity: z.number() })
         .partial()
@@ -410,7 +413,7 @@ export const TOOLS: ToolDef[] = [
           clip = { type: "scene" as const, sceneId: i.sceneId ?? fail("invalid_params", "sceneId required"), start: i.start, duration: i.duration, sourceIn: i.sourceIn ?? 0 };
           break;
         case "color":
-          clip = { type: "color" as const, fill: i.fill ?? "#000000", start: i.start, duration: i.duration ?? fail("invalid_params", "duration required for colour clips") };
+          clip = { type: "color" as const, fill: i.fill ?? "#000000", backdrop: i.backdrop, start: i.start, duration: i.duration ?? fail("invalid_params", "duration required for colour clips") };
           break;
         case "adjustment":
           clip = { type: "adjustment" as const, start: i.start, duration: i.duration ?? fail("invalid_params", "duration required for adjustment layers") };
@@ -466,7 +469,7 @@ export const TOOLS: ToolDef[] = [
           ids.push(r.clipId);
           if (s.transitionIn) tx.dispatch("clip.setTransition", { clipId: r.clipId, transition: { type: s.transitionIn.type, duration: Math.min(s.transitionIn.duration, r.duration) } });
           if (s.look) {
-            const look = lookSpec(s.look, session(ctx).project.looks) ?? fail("unsupported", `Unknown look ${s.look}`);
+            const look = lookSpec(s.look, session(ctx).project.looks, session(ctx).project.settings) ?? fail("unsupported", `Unknown look ${s.look}`);
             for (const e of look.effects) tx.dispatch("effect.add", { clipId: r.clipId, type: e.type, params: e.params });
           }
           for (const e of s.effects) tx.dispatch("effect.add", { clipId: r.clipId, type: e.type, params: e.params });
@@ -613,7 +616,7 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "timeline_set_clip_properties",
-    description: "Change clip properties: opacity, blendMode, transform {x,y,scale,rotation,fit,crop}, fadeIn/fadeOut frames, speed, sourceIn, volumeDb, audioEnabled, reverse (play backwards), text, style, animation, fill, name.",
+    description: "Change clip properties: opacity, blendMode, transform {x,y,scale,rotation,fit,crop}, fadeIn/fadeOut frames, speed, sourceIn, volumeDb, audioEnabled, reverse (play backwards), text, style, animation, fill, backdrop (colour clips: partial patch, or null for a flat fill), name.",
     input: z.object({ clipId: Id, props: z.record(z.string(), z.unknown()) }),
     mutates: true,
     async run(ctx, i) {
@@ -650,7 +653,7 @@ export const TOOLS: ToolDef[] = [
     mutates: true,
     async run(ctx, i) {
       const saved = session(ctx).project.looks;
-      const look = lookSpec(i.look, saved) ?? fail("unsupported", `Unknown look "${i.look}". Available: ${[...LOOKS.map((l) => l.id), ...saved.map((l) => l.id)].join(", ")}`);
+      const look = lookSpec(i.look, saved, session(ctx).project.settings) ?? fail("unsupported", `Unknown look "${i.look}". Available: ${[...LOOKS.map((l) => l.id), ...saved.map((l) => l.id)].join(", ")}`);
       session(ctx).transaction(label(`look ${look.id}`), ctx.source, (tx) => {
         for (const clipId of i.clipIds) {
           if (i.replace) {
@@ -1136,7 +1139,8 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "voice_providers",
-    description: "Text-to-speech engines this machine can use for narration, with their voices. Local: Windows voices (SAPI), eSpeak NG, Flite (robotic). Cloud (OpenAI, ElevenLabs) only when their API key is set; using them sends the script text to that provider.",
+    description:
+      "Text-to-speech engines this machine can use for narration, with their voices, quality class (neural > parametric > formant) and licence. Local, most natural first: Piper (neural, user-installed voice model), Windows voices (SAPI), RHVoice, SVOX Pico, Flite and eSpeak NG (formant, robotic). The default is the best available local engine. Cloud (OpenAI, ElevenLabs) only when their API key is set and only when named; using them sends the script text to that provider. Prefer voices without a non-commercial licence for promotional work.",
     input: z.object({}),
     mutates: false,
     async run(ctx) {
@@ -1144,7 +1148,7 @@ export const TOOLS: ToolDef[] = [
       for (const p of ttsProviders(ctx.engine.ffmpeg)) {
         const st = await p.status();
         const voices = st.available ? await p.voices().catch(() => []) : [];
-        out.push({ id: p.id, label: p.label, kind: p.kind, available: st.available, ...(st.reason ? { reason: st.reason } : {}), voices: voices.slice(0, 40) });
+        out.push({ id: p.id, label: p.label, kind: p.kind, quality: p.quality, license: p.license, available: st.available, ...(st.reason ? { reason: st.reason } : {}), voices: voices.slice(0, 40) });
       }
       return { data: { providers: out } };
     },
