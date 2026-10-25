@@ -77,6 +77,14 @@ describe("voice-over workflow (local engine)", () => {
     const [a, b] = data.segments;
     expect(a!.start).toBe(15);
     expect(b!.start).toBe(15 + a!.frames + 15); // 0.5 s gap at 30 fps
+    // Every line is levelled to dialogue loudness, short ones included (single-pass loudnorm left 2 s lines 2-4 LU low).
+    for (const seg of data.segments) {
+      const file = s.project.assets.find((x) => x.id === seg.assetId)!.path;
+      const m = spawnSync("ffmpeg", ["-hide_banner", "-nostats", "-i", file, "-af", "ebur128=peak=true", "-f", "null", "-"], { encoding: "utf8" }).stderr;
+      const summary = m.slice(m.lastIndexOf("Summary:"));
+      expect(Math.abs(Number(/I:\s*(-?[\d.]+) LUFS/.exec(summary)![1]) + 16), "integrated LUFS").toBeLessThan(1);
+      expect(Number(/Peak:\s*(-?[\d.]+) dBFS/.exec(summary)![1]), "true peak").toBeLessThan(-0.5);
+    }
     for (const seg of data.segments) {
       const asset = s.project.assets.find((x) => x.id === seg.assetId)!;
       expect(asset.tags).toContain(`tts:${local.id}`);

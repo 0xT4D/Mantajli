@@ -298,14 +298,34 @@ export async function defaultTtsProvider(ffmpeg: string): Promise<TtsProvider | 
   return undefined;
 }
 
+/** Dialogue level of every synthesized line. */
+export const SPEECH_LUFS = -16;
+
 /**
- * Trim leading/trailing silence, convert to 48 kHz stereo 16-bit and level to -16 LUFS
- * (dialogue), keeping 80 ms of air at each end.
+ * Trim leading/trailing silence, convert to 48 kHz stereo 16-bit and level to SPEECH_LUFS
+ * (dialogue), keeping 80 ms of air at each end: measure, apply one gain through a true-peak
+ * limiter, measure the result and correct once. (Single-pass loudnorm works on a 3 s window
+ * and left 2 s lines 2-4 LU short.)
  */
 export async function finishSpeech(ffmpeg: string, raw: string, out: string, signal?: AbortSignal): Promise<void> {
   const trim = "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.08";
-  const filter = `${trim},areverse,${trim},areverse,loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000`;
-  await runFfmpeg(ffmpeg, ["-i", raw, "-af", filter, "-ac", "2", "-c:a", "pcm_s16le", out], { signal, timeoutMs: 120000 });
+  const trimmed = `${trim},areverse,${trim},areverse`;
+  const loudness = async (file: string, pre: string) => {
+    const r = await runFfmpeg(ffmpeg, ["-i", file, "-af", `${pre}ebur128`, "-f", "null", "-"], { signal, timeoutMs: 120000 });
+    const v = Number(/I:\s*(-?[\d.]+) LUFS/.exec(r.stderr.slice(r.stderr.lastIndexOf("Summary:")))?.[1]);
+    return Number.isFinite(v) && v > -70 ? v : undefined;
+  };
+  const render = (gain: number) =>
+    runFfmpeg(ffmpeg, ["-i", raw, "-af", `${trimmed},aresample=192000,volume=${gain.toFixed(2)}dB,alimiter=limit=0.841:attack=2:release=40:level=0,aresample=48000`, "-ac", "2", "-c:a", "pcm_s16le", out], { signal, timeoutMs: 120000 });
+  const measured = await loudness(raw, `${trimmed},`);
+  let gain = measured === undefined ? 0 : Math.min(30, SPEECH_LUFS - measured);
+  await render(gain);
+  // Speech peaks sit ~18 dB over its loudness, so the limiter takes ~1 LU back: measure once and correct.
+  const got = measured === undefined ? undefined : await loudness(out, "");
+  if (got !== undefined && Math.abs(SPEECH_LUFS - got) > 0.3) {
+    gain = Math.min(30, gain + SPEECH_LUFS - got);
+    await render(gain);
+  }
   const head = await readFile(out).then((b) => b.length).catch(() => 0);
   if (head < 1000) fail("render_failed", "Speech synthesis produced no audio");
 }

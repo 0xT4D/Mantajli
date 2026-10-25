@@ -301,7 +301,7 @@ export class Engine extends EventEmitter {
     const st = await provider.status();
     if (!st.available) fail("dependency_unavailable", `${provider.label} is unavailable: ${st.reason}`);
     const request = { text, voice: req.voice, rate: req.rate, pitch: req.pitch, style: req.style };
-    const key = sha1(JSON.stringify({ v: 1, p: provider.id, ...request })).slice(0, 12);
+    const key = sha1(JSON.stringify({ v: 2, p: provider.id, ...request })).slice(0, 12); // v2: two-pass levelling
     const file = path.join(s.dir, "generated", "voice", `voice-${provider.id}-${key}.wav`);
     if (!(await exists(file))) {
       const { promise } = this.jobs.submit({ type: "voice", label: `Voice: ${text.slice(0, 40)}`, key: `voice:${key}` }, async (ctx) => {
