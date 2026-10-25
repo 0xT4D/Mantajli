@@ -151,3 +151,39 @@ FFmpeg composition is CPU-bound (~3 fps at 1080×1920 with looks), so long 4K ex
 
 See `PROJECT_STATUS.md` → "Reference benchmark" for the montage built with Mantagli's own
 features, where its renders live, and the latest side-by-side findings.
+
+## 8. Session 6: ARENA benchmark against the references (2026-10-25)
+
+`scripts/benchmark/arena.ts` builds a 22 s vertical teaser using only the tool layer: generated
+synthwave score → shots cut to its sections → 3 Blender scenes (synthwave horizon, chrome title,
+metal end card) + 2D type → whip / zoom-through / glitch / flash transitions → espeak voice-over
+with captions → suggested SFX → CRT finish + beat pulse → export → verification → review sheet.
+It ran on a CPU-only container at 540×960 (EEVEE ≈ 3 s per frame; 416 3D frames; 22.5–23.5 min per
+full build, 1.2 min to re-export with cached 3D frames).
+
+| Measure | Cybercamp | Securinets | TGA | ARENA (final export) |
+|---|---|---|---|---|
+| Integrated loudness | −13.4 LUFS | −13.9 LUFS | −9.7 LUFS | −13.8 LUFS (target −14) |
+| True peak | −0.3 dBTP | −2.0 dBTP | +7.9 dBTP | −0.8 dBTP |
+| Loudness range | 4.9 LU | 3.0 LU | 10.8 LU | 12.0 LU |
+| Intro vs. main section | −25.0 vs −13.5 LUFS | −15.0 vs −13.7 | −17.3 vs −8.2 | −23.2 vs −12.5 |
+| Transition on the drop | yes (5.3 s) | yes | yes | yes (zoom-through at 8.1 s, riser + hit) |
+
+What the benchmark found, and what was fixed (each with a test):
+1. True peak +0.3 dBTP with a −14 LUFS target: the master limiter worked on samples. Now 4×
+   oversampled with a −1 dBFS ceiling.
+2. The synthwave build started 0.4 dB *under* the intro and the voice-over ducked it to near
+   silence. Builds now carry a half-time kick and a swelling bass (in the test piece the
+   build's first bar is now 4.9 dB over the intro's last bar, was −0.4 dB), outros
+   ride the groove for a bar.
+3. Voice lines came out at −20.1 / −18.4 LUFS (single-pass loudnorm cannot level 2 s clips).
+   Now measured and corrected: −16 ± 1 LUFS per line; −16.6 / −17.7 LUFS in the final mix.
+4. The −14 LUFS export target landed at −12.7 LUFS. Now a measured two-pass gain: −13.8.
+5. Flat colour cards read as empty frames: the benchmark now uses a vignette glow + grain on them
+   (an editing fix with existing effects; the app has no gradient fill — see PROJECT_STATUS).
+
+Still behind the references (not fixed this session): espeak is an intelligible but robotic
+voice (Windows SAPI or a cloud voice is the quality path); the 2D cards are plain compared with
+the references' textured, layered backgrounds; loudness range is wider than Cybercamp/Securinets
+because the generated intro is sparse (a deliberate contrast, similar to Cybercamp's intro);
+3D at 540×960 on EEVEE-fast is soft compared with the references' 1080-wide renders.

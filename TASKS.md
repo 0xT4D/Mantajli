@@ -108,6 +108,22 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Feature sweep on Linux: 123/123, all 65 tools (sweep fixtures made portable)
 - [x] Scatter bursts (physics-lite) + fix: nested scene-object patches reset other settings
 
+## M14 Audio, voice and end-to-end benchmark (session 6, cloud Linux container; see PROJECT_AUDIT.md)
+- [x] Audit: PROJECT_AUDIT.md (implemented / partial / missing, constraints, prioritised plan)
+- [x] Music generator: synthwave / cinematic / techno × dark / tense / uplifting, planned structure, exact beat grid + sections on the asset, Insert → Generate music, `music_generate`
+- [x] Builds climb from the intro, outros ride out (found by the ARENA benchmark; `MUSIC_GENERATOR_VERSION` 2)
+- [x] TTS providers: SAPI (Windows, untested here), espeak-ng, flite, OpenAI, ElevenLabs; local default only; trim + −16 LUFS levelling
+- [x] Narration: script segments → Voice track + timed captions + ducking; re-voice one line (`voice_narrate`, `voice_regenerate`, Insert → Voice-over)
+- [x] Sound design suggestions from transitions / drops / titles with mix-clarity rules (`sfx_suggest`, Insert → Sound design & mix)
+- [x] Mix metering of the export mix (`audio_meter`): LUFS, LRA, true peak, hot spans, warnings
+- [x] Master limiter at 4× oversampling, −1 dBFS ceiling (true peak was +0.3 dBTP)
+- [x] Export presets reel720, landscape720, project (custom size)
+- [x] End-to-end benchmark ARENA through the tool layer: build, export, verify, review, fix (`scripts/benchmark/arena.ts`)
+- [ ] Speech-to-text (Whisper) for transcript-timed captions — not started (no model download in this container)
+- [ ] Interactive three.js 3D viewport — not started (3D is edited through forms and rendered previews)
+- [ ] Image / 3D-model generation providers — not started
+- [ ] Cloud music-model provider behind `generateMusic`'s result shape — not started
+
 ## M7 AI Director
 - [x] Shared tool layer (52 tools), MCP server (standalone + bridge to app)
 - [x] Director loop (streaming, approvals, cancel, revert/accept, previews as images)

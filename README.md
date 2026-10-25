@@ -13,6 +13,8 @@ Claude Code via MCP) edits the real, editable project.
 - Blender 4.2+ (5.2 LTS tested). Auto-detected in Program Files, `D:\DevTools`, or set in Settings
 - For the desktop shell: Rust + Tauri prerequisites (WebView2 ships with Windows 11)
 - Optional: an Anthropic API key for the in-app AI Director
+- Optional voice-over engines: Windows voices (built in), `espeak-ng`, or FFmpeg built with
+  `libflite`; cloud voices with `OPENAI_API_KEY` or `ELEVENLABS_API_KEY` in the engine's environment
 
 ## Run (development)
 ```bash
@@ -80,6 +82,24 @@ The installer lands in `<cargo target>/release/bundle/nsis/`.
 - **Bursts**: a scatter object's *Burst* makes its pieces fly out at a frame — coin fountains,
   debris — falling, bouncing on the floor and settling flat, identically on every render.
 
+### Session 6
+- **Generate music** (Insert menu): a synthesized score in a chosen style (synthwave, cinematic,
+  techno), mood and length with a real structure — intro, build, drop, breakdown, outro. It is a
+  procedural synthesizer, not an AI model; because the app wrote every note, its beat and section
+  markers are exact, so cuts land on the real drop.
+- **Voice-over** (Insert menu): one line per paragraph is spoken, placed on a *Voice* track with
+  timed captions, and the music ducks under it. Local engines by default (Windows voices,
+  espeak-ng, flite); OpenAI or ElevenLabs only when you pick them — then the script text is sent to
+  that service. Re-voice a single line without touching the rest. Captions are timed from the text,
+  not transcribed.
+- **Sound design & mix** (Insert menu): suggested whooshes, risers, hits and glitches where the
+  edit's transitions, drops and title reveals happen (fewer under dialogue), placed in one step;
+  *Measure mix* reports loudness (LUFS), loudness range and true peak of the export mix, with
+  warnings. The master limiter holds peaks under −1 dBTP.
+- **Export presets** 720p (vertical and landscape) and *Project size* (any custom resolution).
+- `scripts/benchmark/arena.ts`: an end-to-end teaser built only through the AI tool layer and
+  exported through the real pipeline (see PROJECT_STATUS.md for measured results).
+
 ## AI Director (in-app)
 Open the AI panel, add your Anthropic API key (stored in the Windows Credential Manager), write a
 brief and press **Direct**. The Director inspects the project, analyses music, records a shot
@@ -107,5 +127,6 @@ node scripts/ui-live-parity.mjs out [url]   # live preview vs exact frame per ef
 ## Project folder
 `Name.mantagli/` contains `project.json` (versioned schema), `backups/`, `cache/` (thumbnails,
 proxies, waveforms, 3D frames, previews — safe to delete), `exports/`, `scenes/*.blend`,
-`oplog.jsonl`, `generated/` (synthesized sound effects, baked scenes — imported as assets).
+`oplog.jsonl`, `generated/` (synthesized sound effects, music, voice-overs, baked scenes —
+imported as assets).
 Source media are referenced, never modified.

@@ -78,3 +78,10 @@ Scored by impact on finished videos, verifiability here, and cost.
 | 6 | Interactive 3D viewport (three.js) with gizmos | High for modelling UX | L | partially | defer; document |
 | 7 | Speech recognition (whisper) | Medium | M | no model download possible here | defer; document |
 | 8 | AI image/3D generation providers | Medium | L, external | no keys | defer |
+
+## 6. Outcome (end of session 6)
+Items 1–5 are done and tested; 6–8 are deferred as planned. The benchmark (item 5) found four
+defects that unit tests had not: the master limiter let true peak reach +0.3 dBTP, synthwave
+builds started below their intro, short voice lines were 2–4 LU under the dialogue level, and
+the −14 LUFS export target landed at −12.7 LUFS. All four are fixed with regression tests;
+measured results are in PROJECT_STATUS.md and REFERENCE_VIDEO_ANALYSIS.md §8.

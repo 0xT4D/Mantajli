@@ -221,3 +221,43 @@ frame renders on its own and every render of it is identical. Capped at 2000 pie
 thousands stay on the geometry-nodes instancer.
 Related fix: deep patches (`patchSchema`) now recurse through `.optional()`; before, a partial patch
 of an optional settings object was parsed whole and reset every other field to its default.
+
+## D30 — Generated music carries its own ground truth (session 6, 2026-10-25)
+The music generator (`engine/src/media/music.ts`) is a deterministic synthesizer, not a model:
+style (synthwave / cinematic / techno) × mood (dark / tense / uplifting) × length, built from bars
+on a fixed tempo with a planned structure (intro → build → drop → breakdown → outro, drops in whole
+4-bar phrases). Because the engine wrote every note, the asset's beat analysis is the exact grid
+(bpm, beats, downbeats, sections) rather than an estimate, and edits snap to the real drop. The
+app's own beat tracker is used as an independent check in `music.test.ts` (tempo within 3 %,
+drop within 0.6 s). It is honest about what it is: loop-based production music for drafts and
+temp scores, labelled "generated" in the bin. A cloud model provider can be added behind the same
+`generateMusic` result shape; none is wired up, and the UI does not claim one.
+
+## D31 — Text-to-speech is a provider interface; local first, cloud only by explicit choice
+`engine/src/voice/tts.ts`: providers report `status()` (available + reason) and `voices()`, then
+synthesize to a WAV that the engine trims (silenceremove), loudness-normalises (−16 LUFS) and
+resamples to 48 kHz stereo, so every voice sits in the mix the same way. Local: Windows SAPI
+(System.Speech via PowerShell; text and voice passed through files, never the command line),
+espeak-ng, FFmpeg's flite. Cloud: OpenAI and ElevenLabs over HTTPS, keys only from environment
+variables read by the engine process (never stored in the project, never sent to the UI). The
+default provider is always a local one; a cloud provider is used only when chosen in the dialog or
+named in the tool call, and the dialog states that the script text is sent to that service.
+Voice cloning is not offered. Captions are timed from text length and punctuation pauses inside
+each spoken segment (no speech recognition is claimed); regenerating a line replaces the clip at
+the same start and re-times only its own caption clips.
+
+## D32 — Sound design is suggested from the edit, with mix-clarity rules
+`core/soundDesign.ts suggestSoundDesign` reads the timeline (two-sided transitions, section markers,
+animated titles on beats) and proposes procedural SFX anchored where the motion peaks (a whip's
+whoosh mid-transition, a zoom-through's riser ending on the cut). Rules keep the mix readable:
+one effect per moment (riser + hit allowed), per-kind minimum gaps, nothing where an SFX already
+sits, −6 dB and no title accents under dialogue, a density cap of ⌈0.6/s⌉ + 2 (title accents go
+first), no drop hits over generated music (it has its own). Suggestions are a list until applied;
+applying is one undo step and applied effects count as existing on the next pass.
+
+## D33 — Meter the mix the way it will be exported; limit true peak at the master
+`engine.meterMix` renders the export's own audio graph (gains, fades, ducking, loudness target,
+limiter, AAC) for the range and runs `ebur128` (integrated, LRA, true peak, short-term max and the
+spans above −0.5 dBTP). The ARENA benchmark measured +0.3 dBTP with a −14 LUFS target because the
+master limiter worked on samples (−0.2 dBFS); it now limits at 4× oversampling with a −1 dBFS
+ceiling, so inter-sample overs stay below 0 dBTP.
