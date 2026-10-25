@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   AssetSchema,
+  EASINGS,
   History,
   lookSpec,
+  TRANSITION_PRESETS,
+  TRANSITION_TYPES,
   applyCommand,
   buildCompositionPlan,
   createProject,
@@ -324,5 +327,56 @@ describe("saved looks", () => {
     expect(lookSpec(saved.result.lookId, p.looks)?.label).toBe("my crt");
     p = run(p, "look.remove", { lookId: saved.result.lookId }).project;
     expect(p.looks).toHaveLength(0);
+  });
+});
+
+describe("transition presets", () => {
+  it("applies built-in presets to many clips in one step, shortened to fit short clips", () => {
+    let p = createProject({ name: "T" });
+    const a = run(p, "clip.add", { trackId: v1(p), clip: { type: "color", fill: "#ff0000", start: 0, duration: 30 } });
+    const b = run(a.project, "clip.add", { trackId: v1(p), clip: { type: "color", fill: "#00ff00", start: 30, duration: 30 } });
+    const c = run(b.project, "clip.add", { trackId: v1(p), clip: { type: "color", fill: "#0000ff", start: 60, duration: 6 } });
+    const r = run(c.project, "transitionPreset.apply", { clipIds: [b.result.clipId, c.result.clipId], presetId: "dropWhip" });
+    p = r.project;
+    expect(r.result).toEqual({ applied: 2, shortened: [c.result.clipId] });
+    const clip = (id: string) => findClip(p, id)!.clip;
+    expect(clip(b.result.clipId).transitionIn).toEqual({ type: "whipLeft", duration: 10, easing: "expoInOut", intensity: 1.2 });
+    expect(clip(c.result.clipId).transitionIn).toMatchObject({ type: "whipLeft", duration: 6 });
+    expect(() => run(p, "transitionPreset.apply", { clipIds: [b.result.clipId], presetId: "nope" })).toThrow(/Unknown transition preset/);
+    // The composition plan picks the preset up like any transition (outgoing shot held under it).
+    const plan = buildCompositionPlan(p, { rangeStart: 30, rangeEnd: 31 });
+    expect(plan.layers.find((l) => l.clip.id === b.result.clipId)?.clip.transitionIn?.type).toBe("whipLeft");
+  });
+
+  it("saves a clip's transition as a project preset, replaces by name, reserves built-in names and removes", () => {
+    let p = createProject({ name: "T" });
+    const a = run(p, "clip.add", { trackId: v1(p), clip: { type: "color", fill: "#ff0000", start: 0, duration: 30 } });
+    const b = run(a.project, "clip.add", { trackId: v1(p), clip: { type: "color", fill: "#00ff00", start: 30, duration: 30 } });
+    p = run(b.project, "clip.setTransition", { clipId: b.result.clipId, transition: { type: "zoomThrough", duration: 14, easing: "backOut", intensity: 0.7 } }).project;
+    expect(() => run(p, "transitionPreset.save", { label: "Mine", clipId: a.result.clipId })).toThrow(/no transition/);
+    expect(() => run(p, "transitionPreset.save", { label: "Mine" })).toThrow(/either clipId/);
+    const saved = run(p, "transitionPreset.save", { label: "My punch", clipId: b.result.clipId });
+    p = saved.project;
+    expect(p.transitionPresets).toEqual([{ id: saved.result.presetId, label: "My punch", description: "zoomThrough 14f backOut", transition: { type: "zoomThrough", duration: 14, easing: "backOut", intensity: 0.7 } }]);
+    p = run(p, "transitionPreset.save", { label: "my PUNCH", transition: { type: "flash", duration: 4 } }).project;
+    expect(p.transitionPresets).toHaveLength(1);
+    expect(p.transitionPresets[0]!.transition).toEqual({ type: "flash", duration: 4 });
+    expect(() => run(p, "transitionPreset.save", { label: "Beat flash", transition: { type: "flash", duration: 4 } })).toThrow(/built-in/);
+    // Applying a saved preset by id; the project summary lists it for the AI.
+    p = run(p, "transitionPreset.apply", { clipIds: [a.result.clipId], presetId: saved.result.presetId }).project;
+    expect(findClip(p, a.result.clipId)!.clip.transitionIn).toEqual({ type: "flash", duration: 4 });
+    expect(summarizeProject(p).savedTransitionPresets).toEqual([{ id: saved.result.presetId, label: "my PUNCH", transition: "flash:4f" }]);
+    // Survives a save/load round trip.
+    expect(migrateProject(JSON.parse(JSON.stringify(p))).project.transitionPresets).toEqual(p.transitionPresets);
+    p = run(p, "transitionPreset.remove", { presetId: saved.result.presetId }).project;
+    expect(p.transitionPresets).toHaveLength(0);
+    expect(() => run(p, "transitionPreset.remove", { presetId: saved.result.presetId })).toThrow(/not found/);
+  });
+
+  it("only uses transition types and easings the renderers implement", () => {
+    for (const t of TRANSITION_PRESETS) {
+      expect(TRANSITION_TYPES, t.id).toContain(t.transition.type);
+      if (t.transition.easing) expect(EASINGS as readonly string[], t.id).toContain(t.transition.easing);
+    }
   });
 });

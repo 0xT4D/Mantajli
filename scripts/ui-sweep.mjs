@@ -56,6 +56,27 @@ await state("timeline: select a clip (clip inspector)", async () => {
   if (await clip.count()) await clip.click();
   else await page.mouse.click(700, 805);
 });
+const transitionSelect = () => page.locator("select:has(option[value='crossfade']):has(option[value='none'])").first();
+await state("transition preset from the inspector", async () => {
+  await page.locator("[data-clip-id]:has-text('clip_b.mp4')").first().click();
+  await page.locator("select:has(option[value='dropWhip'])").first().selectOption("dropWhip");
+  await page.waitForTimeout(400);
+  const v = await transitionSelect().inputValue();
+  if (v !== "whipLeft") throw new Error(`transition is ${v}, expected whipLeft`);
+});
+await state("save transition preset", async () => {
+  await page.locator("input[placeholder='Preset name']").first().fill("Sweep whip");
+  await page.locator("input[placeholder='Preset name']").first().press("Enter");
+  await page.locator("button:has-text('Save'):near(input[placeholder='Preset name'])").first().click();
+  await page.locator("span", { hasText: "Sweep whip" }).first().waitFor({ timeout: 3000 });
+});
+await state("undo preset save and apply", async () => {
+  await page.keyboard.press("Control+z");
+  await page.keyboard.press("Control+z");
+  await page.waitForTimeout(400);
+  const v = await transitionSelect().inputValue();
+  if (v !== "crossfade") throw new Error(`transition is ${v} after undo, expected crossfade`);
+});
 await state("timeline: select a track (track inspector)", () => page.locator("text=V1").first().click());
 await state("play 1.5 s (live compositor)", async () => {
   await page.keyboard.press("Home");

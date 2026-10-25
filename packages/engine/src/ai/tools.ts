@@ -18,6 +18,7 @@ import {
   RENDER_PRESET_IDS,
   BLEND_MODES,
   LOOKS,
+  TRANSITION_PRESETS,
   MATERIAL_PRESETS,
   MESH_PRIMITIVES,
   SCENE_ANIM_PROPERTIES,
@@ -214,6 +215,7 @@ export const TOOLS: ToolDef[] = [
           effects: EFFECTS.map((e) => ({ type: e.type, description: e.description, params: e.params })),
           transitions: TRANSITIONS.map((t) => ({ type: t.type, description: t.description })),
           looks: LOOKS.map((l) => ({ id: l.id, description: l.description })),
+          transitionPresets: TRANSITION_PRESETS.map((t) => ({ id: t.id, description: t.description, transition: t.transition })),
           textAnimations: TEXT_ANIMATIONS,
           speedRampPresets: SPEED_RAMP_PRESETS,
           renderPresets: RENDER_PRESETS.map((r) => ({ id: r.id, description: r.description })),
@@ -504,6 +506,24 @@ export const TOOLS: ToolDef[] = [
       const transition = i.type ? { type: i.type, duration: i.duration, ...(i.easing ? { easing: i.easing } : {}), ...(i.intensity !== undefined ? { intensity: i.intensity } : {}) } : null;
       session(ctx).dispatch("clip.setTransition", { clipId: i.clipId, transition }, ctx.source, label("transition"));
       return { data: { ok: true } };
+    },
+  }),
+  tool({
+    name: "transition_apply_preset",
+    description: `Set a transition preset as the transition into clips (one undo step): a built-in preset (${TRANSITION_PRESETS.map((t) => t.id).join(", ")}) or the id of one saved in this project (see project_get_state savedTransitionPresets / transition_save_preset). Shortened to fit short clips.`,
+    input: z.object({ clipIds: z.array(Id).min(1).max(500), preset: z.string().min(1) }),
+    mutates: true,
+    async run(ctx, i) {
+      return { data: session(ctx).dispatch("transitionPreset.apply", { clipIds: i.clipIds, presetId: i.preset }, ctx.source, label(`transition preset ${i.preset}`)) };
+    },
+  }),
+  tool({
+    name: "transition_save_preset",
+    description: "Save a clip's transition in (type, length, easing, intensity) as a reusable preset in this project; apply it with transition_apply_preset (preset = the returned presetId).",
+    input: z.object({ clipId: Id, label: z.string().min(1).max(80), description: z.string().max(300).optional() }),
+    mutates: true,
+    async run(ctx, i) {
+      return { data: session(ctx).dispatch("transitionPreset.save", i, ctx.source, label(`save transition preset ${i.label}`)) };
     },
   }),
   tool({

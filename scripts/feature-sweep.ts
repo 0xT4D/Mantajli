@@ -421,6 +421,17 @@ await step("look_save + look_apply (saved look)", async () => {
   check(JSON.stringify(st).includes("scanlines"), "saved look not applied");
   return l.lookId;
 });
+await step("transition_apply_preset + transition_save_preset", async () => {
+  const a = await ui.tool("timeline_add_clip", { trackId: tid("V2"), type: "color", start: 910, duration: 30, fill: "#204060" });
+  const b = await ui.tool("timeline_add_clip", { trackId: tid("V2"), type: "color", start: 940, duration: 8, fill: "#602040" });
+  const r = await ui.tool("transition_apply_preset", { clipIds: [a.clipId, b.clipId], preset: "punchThrough" });
+  check(r.applied === 2 && r.shortened.length === 1 && r.shortened[0] === b.clipId, JSON.stringify(r));
+  const saved = await ui.tool("transition_save_preset", { clipId: a.clipId, label: "Sweep punch" });
+  const st = await ui.tool("project_get_state", {});
+  check(st.savedTransitionPresets?.some((t: { id: string }) => t.id === saved.presetId), "saved preset missing from project state");
+  await ui.tool("transition_apply_preset", { clipIds: [b.clipId], preset: saved.presetId });
+  return `${saved.presetId}; short clip got ${clipsOf("V2").find((c) => c.id === b.clipId)?.transitionIn?.duration}f`;
+});
 await step("preview_render returns real frames as images", async () => {
   const p = await ui.tool("preview_render", { frames: [10, 170, 430], scale: 0.3 });
   check(p._images === 3, "images");

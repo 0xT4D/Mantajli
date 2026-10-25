@@ -607,6 +607,7 @@ function ClipView({
         missing && "border-err",
       )}
       style={{ left: start * zoom, width: w, background: color, transform: ghostTrackOffset ? `translateY(${ghostTrackOffset}px)` : undefined, zIndex: selected ? 5 : 1 }}
+      data-clip-id={clip.id}
       onPointerDown={(e) => onPointerDown(e, "body")}
       onContextMenu={onContextMenu}
       title={`${label}\n${formatTimecode(clip.start, project.settings.fps)} → ${formatTimecode(clipEnd(clip), project.settings.fps)} (${dur}f)`}

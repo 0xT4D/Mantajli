@@ -11,6 +11,7 @@ import {
   MESH_PRIMITIVES,
   TEXT_ANIMATIONS,
   TRANSITIONS,
+  TRANSITION_PRESETS,
   BLEND_MODES,
   matchingRenderPreset,
   RENDER_PRESETS,
@@ -332,6 +333,7 @@ function ClipInspector({ project, clip, track }: { project: Project; clip: Clip;
                 )}
               </>
             )}
+            <TransitionPresets project={project} clipIds={[clip.id]} saveFrom={clip.transitionIn ? clip.id : undefined} />
           </>
         )}
       </Section>
@@ -494,16 +496,62 @@ function KeyframesSection({ clip }: { clip: Clip }) {
 
 function MultiClipInspector({ clips }: { clips: Clip[] }) {
   const { transaction, setSelection } = useStudio();
+  const project = useStudio((s) => s.session.project)!;
+  const visual = clips.filter((c) => project.tracks.some((t) => t.kind !== "audio" && t.clips.includes(c))).map((c) => c.id);
   return (
     <div className="space-y-2 p-3">
       <div className="text-[12px]">{clips.length} clips selected</div>
       <Row label="Opacity">
         <Slider value={clips[0]!.opacity} min={0} max={1} step={0.01} onChange={(v) => void transaction("Opacity", clips.map((c) => ({ name: "clip.update", params: { clipId: c.id, props: { opacity: v } } })))} />
       </Row>
+      {visual.length > 0 && <TransitionPresets project={project} clipIds={visual} />}
       <Button variant="danger" onClick={() => void transaction("Delete clips", [{ name: "clip.remove", params: { clipIds: clips.map((c) => c.id) } }]).then(() => setSelection({ kind: "none" }))}>
         <Trash2 size={12} /> Delete {clips.length} clips
       </Button>
     </div>
+  );
+}
+
+/**
+ * Transition presets (built-in and saved in the project): apply one to the clips in one
+ * undo step, save the clip's transition as a preset, delete saved ones.
+ */
+function TransitionPresets({ project, clipIds, saveFrom }: { project: Project; clipIds: string[]; saveFrom?: string }) {
+  const cmd = useCmd();
+  const [name, setName] = useState("");
+  const options = [
+    { value: "", label: clipIds.length > 1 ? `Apply to ${clipIds.length} clips…` : "Apply a preset…" },
+    ...project.transitionPresets.map((t) => ({ value: t.id, label: `★ ${t.label}` })),
+    ...TRANSITION_PRESETS.map((t) => ({ value: t.id, label: t.label })),
+  ];
+  const save = () => {
+    if (!saveFrom || !name.trim()) return;
+    cmd("transitionPreset.save", { label: name.trim(), clipId: saveFrom }, `Save transition preset ${name.trim()}`);
+    setName("");
+  };
+  return (
+    <>
+      <Row label="Preset" title="Transition type, length, easing and intensity in one click (★ = saved in this project)">
+        <Select value="" onChange={(v) => v && cmd("transitionPreset.apply", { clipIds, presetId: v }, "Transition preset")} options={options} />
+      </Row>
+      {saveFrom && (
+        <Row label="Save preset">
+          <TextField value={name} placeholder="Preset name" onCommit={setName} />
+          <Button onClick={save} disabled={!name.trim()}>
+            <Plus size={12} /> Save
+          </Button>
+        </Row>
+      )}
+      {saveFrom &&
+        project.transitionPresets.map((t) => (
+          <Row key={t.id} label="">
+            <span className="min-w-0 flex-1 truncate text-[10px] text-dim" title={t.description}>
+              ★ {t.label} · {t.transition.type} {t.transition.duration}f
+            </span>
+            <IconButton size={20} icon={<Trash2 size={11} />} label="Delete saved preset" onClick={() => cmd("transitionPreset.remove", { presetId: t.id }, "Delete transition preset")} />
+          </Row>
+        ))}
+    </>
   );
 }
 

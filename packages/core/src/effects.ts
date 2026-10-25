@@ -392,6 +392,34 @@ export const ZOOM_THROUGH_SCALE = 2.2;
 export const TRANSITION_TYPES = TRANSITIONS.map((t) => t.type);
 
 // ---------------------------------------------------------------------------
+// Transition presets: a transition with its length, easing and intensity, reusable in one click.
+
+export interface TransitionPresetSpec {
+  id: string;
+  label: string;
+  description: string;
+  /** easing: one of the schema EASINGS (validated when applied). */
+  transition: { type: string; duration: number; easing?: string; intensity?: number };
+}
+
+/** Built-in presets, tuned on the reference teasers (transitions land on drops and section changes). */
+export const TRANSITION_PRESETS: TransitionPresetSpec[] = [
+  { id: "dropWhip", label: "Whip on the drop", description: "Fast whip pan, both shots streaking left. Put it on a drop or section change.", transition: { type: "whipLeft", duration: 10, easing: "expoInOut", intensity: 1.2 } },
+  { id: "whipTilt", label: "Whip tilt", description: "Short vertical whip for reels.", transition: { type: "whipUp", duration: 8, easing: "expoInOut" } },
+  { id: "punchThrough", label: "Punch through", description: "Punch into the outgoing shot, cut at the peak, settle on the next.", transition: { type: "zoomThrough", duration: 12 } },
+  { id: "glitchHit", label: "Glitch hit", description: "Hard cut wrapped in a strong RGB-split burst.", transition: { type: "glitchCut", duration: 6, intensity: 1.5 } },
+  { id: "beatFlash", label: "Beat flash", description: "Quick white flash on a beat.", transition: { type: "flash", duration: 6 } },
+  { id: "irisReveal", label: "Iris reveal", description: "Circle opens fast and settles.", transition: { type: "iris", duration: 18, easing: "expoOut" } },
+  { id: "softDissolve", label: "Soft dissolve", description: "Gentle dissolve for breakdowns and quiet sections.", transition: { type: "crossfade", duration: 20, easing: "easeInOut" } },
+  { id: "slowDip", label: "Slow dip to black", description: "Fade through black for endings and breaks.", transition: { type: "dipBlack", duration: 24 } },
+];
+
+/** A built-in preset by id, or one saved in the project. */
+export function transitionPresetSpec(id: string, saved: readonly TransitionPresetSpec[] = []): TransitionPresetSpec | undefined {
+  return TRANSITION_PRESETS.find((t) => t.id === id) ?? saved.find((t) => t.id === id);
+}
+
+// ---------------------------------------------------------------------------
 // Text animations (curves in core/animation.ts; typewriter reveals characters, see textReveal).
 
 export const TEXT_ANIMATIONS = ["none", "fade", "slideUp", "slideDown", "slideLeft", "slideRight", "pop", "typewriter", "words", "scramble"] as const;

@@ -558,6 +558,15 @@ export const UserLookSchema = z.object({
 });
 export type UserLook = z.infer<typeof UserLookSchema>;
 
+/** A transition preset saved by the user (alongside the built-in TRANSITION_PRESETS). */
+export const UserTransitionPresetSchema = z.object({
+  id: IdSchema,
+  label: z.string().min(1).max(80),
+  description: z.string().max(300).default(""),
+  transition: TransitionSchema,
+});
+export type UserTransitionPreset = z.infer<typeof UserTransitionPresetSchema>;
+
 export const OpLogEntrySchema = z.object({
   at: z.string(),
   source: z.enum(["user", "ai", "mcp", "system"]),
@@ -580,6 +589,8 @@ export const ProjectSchema = z.object({
   mix: MixSettingsSchema.default(MixSettingsSchema.parse({})),
   /** Looks saved in this project (effect stacks the user made reusable). */
   looks: z.array(UserLookSchema).default([]),
+  /** Transition presets saved in this project. */
+  transitionPresets: z.array(UserTransitionPresetSchema).default([]),
   ai: z
     .object({
       plans: z.array(AiPlanSchema).default([]),

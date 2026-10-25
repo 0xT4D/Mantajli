@@ -1,6 +1,6 @@
 import { produce, type Draft } from "immer";
 import { z } from "zod";
-import { lookSpec, normalizeEffectParams, EFFECT_TYPES, TRANSITION_TYPES, LOOKS, type LookSpec } from "./effects.js";
+import { lookSpec, normalizeEffectParams, transitionPresetSpec, EFFECT_TYPES, TRANSITION_PRESETS, TRANSITION_TYPES, LOOKS, type LookSpec } from "./effects.js";
 import { fail } from "./errors.js";
 import { cloneClip, makeAdjustmentClip, makeColorClip, makeMediaClip, makeSceneClip, makeTextClip, makeTrack, makeSceneObject } from "./factories.js";
 import { newId } from "./ids.js";
@@ -25,6 +25,7 @@ import {
   TRACK_KINDS,
   TextStyleSchema,
   TransformSchema,
+  TransitionSchema,
   BLEND_MODES,
   type Clip,
   type Project,
@@ -786,6 +787,50 @@ export const COMMANDS = {
     apply(p, { lookId }) {
       if (!p.looks.some((l) => l.id === lookId)) fail("not_found", `Saved look ${lookId} not found`);
       p.looks = p.looks.filter((l) => l.id !== lookId);
+    },
+  }),
+
+  // ------------------------------------------------------------ transition presets
+
+  "transitionPreset.save": def({
+    description: "Save a transition (a clip's transition in, or one given explicitly) as a reusable preset in this project (replaces a saved preset with the same label).",
+    params: z.object({ label: z.string().min(1).max(80), description: z.string().max(300).optional(), clipId: IdSchema.optional(), transition: TransitionSchema.optional() }),
+    apply(p, { label, description, clipId, transition }) {
+      if (!clipId === !transition) fail("invalid_params", "Give either clipId (to save its transition) or transition");
+      const t = transition ?? getClip(p, clipId!).clip.transitionIn ?? fail("invalid_params", "The clip has no transition to save");
+      if (TRANSITION_PRESETS.some((x) => x.label.toLowerCase() === label.toLowerCase())) fail("conflict", `"${label}" is a built-in preset name`);
+      const existing = p.transitionPresets.find((x) => x.label.toLowerCase() === label.toLowerCase());
+      const preset = { id: existing?.id ?? newId("tpre"), label, description: description ?? `${t.type} ${t.duration}f${t.easing ? ` ${t.easing}` : ""}`, transition: { ...t } };
+      if (existing) Object.assign(existing, preset);
+      else p.transitionPresets.push(preset);
+      return { presetId: preset.id };
+    },
+  }),
+
+  "transitionPreset.remove": def({
+    description: "Delete a transition preset saved in this project.",
+    params: z.object({ presetId: IdSchema }),
+    apply(p, { presetId }) {
+      if (!p.transitionPresets.some((x) => x.id === presetId)) fail("not_found", `Saved transition preset ${presetId} not found`);
+      p.transitionPresets = p.transitionPresets.filter((x) => x.id !== presetId);
+    },
+  }),
+
+  "transitionPreset.apply": def({
+    description: "Set a transition preset (built-in id or one saved in the project) as the transition into each clip. The length is shortened to fit clips shorter than the preset.",
+    params: z.object({ clipIds: z.array(IdSchema).min(1).max(500), presetId: z.string().min(1) }),
+    apply(p, { clipIds, presetId }) {
+      const spec = transitionPresetSpec(presetId, p.transitionPresets) ?? fail("not_found", `Unknown transition preset "${presetId}"`);
+      const shortened: string[] = [];
+      for (const clipId of clipIds) {
+        const { track, clip } = getClip(p, clipId);
+        assertUnlocked(track);
+        if (track.kind === "audio") fail("invalid_params", `Clip ${clipId} is on an audio track; transitions are visual`);
+        const duration = Math.min(spec.transition.duration, clip.duration);
+        if (duration < spec.transition.duration) shortened.push(clipId);
+        clip.transitionIn = TransitionSchema.parse({ ...spec.transition, duration });
+      }
+      return { applied: clipIds.length, shortened };
     },
   }),
 

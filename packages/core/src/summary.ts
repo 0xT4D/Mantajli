@@ -88,6 +88,10 @@ export function summarizeProject(p: Project, opts: { selection?: string[]; inclu
       onsetFrames: p.markers.filter((m) => m.kind === "onset").map((m) => m.frame),
       other: p.markers.filter((m) => !["beat", "downbeat", "onset"].includes(m.kind)).map((m) => ({ id: m.id, frame: m.frame, kind: m.kind, label: m.label })),
     },
+    ...(p.looks.length ? { savedLooks: p.looks.map((l) => ({ id: l.id, label: l.label, effects: l.effects.map((e) => e.type) })) } : {}),
+    ...(p.transitionPresets.length
+      ? { savedTransitionPresets: p.transitionPresets.map((t) => ({ id: t.id, label: t.label, transition: `${t.transition.type}:${t.transition.duration}f${t.transition.easing ? `:${t.transition.easing}` : ""}` })) }
+      : {}),
     ...(opts.selection?.length ? { selection: opts.selection } : {}),
     ...(opts.includeValidation !== false ? { issues: validateProject(p).slice(0, 30) } : {}),
   };
