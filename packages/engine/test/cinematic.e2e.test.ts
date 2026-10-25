@@ -294,6 +294,48 @@ describe("3D: media planes, camera paths, scatter", () => {
     expect(() => s.dispatch("scene.addObject", { sceneId: sc.sceneId, object: { kind: "media", name: "Bad", media: { assetId: "nope" } } as never })).toThrow(/image or video/);
     expect(() => s.dispatch("scene.animate", { sceneId: sc.sceneId, objectId: coins.id, property: "pathProgress", keyframes: [{ frame: 0, value: [0] }] })).toThrow(/path/);
   });
+
+  it("bursts scatter pieces: hidden before the start, airborne, then settled on the floor — the same pixels every render", async () => {
+    const { meanDiff } = await import("./pixels.js");
+    const s = await fresh("burst3d");
+    // Empty stage: camera at (0, -10, 1) looking 5° down. Glowing coins launch at scene frame 10
+    // from z = 0.5 (≈5 m/s up, peak ≈ 1.75 m) and land on z = 0 after ≈ 1.1 s.
+    const sc = s.dispatch("scene.create", { name: "Burst", durationFrames: 75, template: "empty" });
+    const gold = { preset: "custom", baseColor: "#ffffff", metallic: 0, roughness: 0.5, emissionColor: "#ffd040", emissionStrength: 25, transmission: 0 };
+    const add = s.dispatch("scene.addObject", {
+      sceneId: sc.sceneId,
+      object: { kind: "scatter", name: "Coins", location: [0, 0, 0.5], scatter: { primitive: "coin", distribution: "box", count: 40, area: [0.15, 0.15, 0.05], size: 0.25, seed: 3 }, material: gold } as never,
+    });
+    // Burst added by a partial patch: the stored burst gets the schema defaults for the rest.
+    s.dispatch("scene.updateObject", { sceneId: sc.sceneId, objectId: add.objectId, patch: { scatter: { burst: { frame: 10, speed: 6, spread: 25, bounce: 0.3, stagger: 0 } } } as never });
+    const burst = s.project.scenes[0]!.objects.find((o) => o.id === add.objectId)!.scatter!.burst!;
+    expect(burst).toMatchObject({ frame: 10, speed: 6, gravity: 9.81, floor: 0, direction: [0, 0, 1] });
+
+    const frames = [5, 22, 74, 75]; // Blender frames = scene frames + 1
+    const r = await engine.renderScene(sc.sceneId, { quality: "draft", scale: 0.25, frames });
+    const file = (f: number) => path.join(r.dir, `frame_${String(f).padStart(5, "0")}.png`);
+    for (const f of frames) await copyFile(file(f), path.join(SHOTS, `burst_f${f}.png`));
+    const core = ([R, G]: RGB) => R > 230 && G > 200; // the coins themselves, not their bloom
+    const before = bbox(await pixels(file(5)), core);
+    const mid = bbox(await pixels(file(22)), core);
+    const end = bbox(await pixels(file(75)), core);
+    expect(before.found).toBe(false); // not launched yet: scaled to nothing
+    expect(mid.found).toBe(true);
+    expect(end.found).toBe(true);
+    const H = (await pixels(file(75))).h;
+    expect(mid.cy).toBeLessThan(H * 0.35); // high in the air
+    expect(end.y0).toBeGreaterThan(H * 0.4); // all down at the floor (its line is just below the centre)
+    expect(end.w).toBeGreaterThan(mid.w * 0.6); // spread out by the cone
+    // Settled: nothing moves any more between the last two frames.
+    expect(meanDiff(await pixels(file(74)), await pixels(file(75)))).toBeLessThan(0.5);
+
+    // Deterministic: the same frame rendered again (no cache) is the same picture.
+    const again = path.join(SHOTS, "burst_f22_first.png");
+    await copyFile(file(22), again);
+    await rm(file(22));
+    await engine.renderScene(sc.sceneId, { quality: "draft", scale: 0.25, frames: [22] });
+    expect(meanDiff(await pixels(again), await pixels(file(22)))).toBeLessThan(1);
+  });
 });
 
 describe("music structure", () => {

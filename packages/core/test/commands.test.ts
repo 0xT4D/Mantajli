@@ -210,6 +210,28 @@ describe("scenes", () => {
     expect(size("vertical", "metalTitle", "NIGHT CITY")).toBeLessThan(0.7);
   });
 
+  it("patches nested object settings field by field (other fields keep their values)", () => {
+    let p = createProject({ name: "P" });
+    const sc = run(p, "scene.create", { name: "s", durationFrames: 30, template: "empty" });
+    p = sc.project;
+    const sceneId = sc.result.sceneId;
+    const add = run(p, "scene.addObject", { sceneId, object: { kind: "scatter", name: "c", scatter: { count: 40, distribution: "box", seed: 7 } } as never });
+    p = add.project;
+    const obj = (id: string) => p.scenes[0]!.objects.find((o) => o.id === id)!;
+    p = run(p, "scene.updateObject", { sceneId, objectId: add.result.objectId, patch: { scatter: { size: 0.5 } } }).project;
+    expect(obj(add.result.objectId).scatter).toMatchObject({ count: 40, distribution: "box", seed: 7, size: 0.5 });
+    // Was: patching the f-stop reset the focal length to its default.
+    const cam = p.scenes[0]!.objects.find((o) => o.kind === "camera")!;
+    p = run(p, "scene.updateObject", { sceneId, objectId: cam.id, patch: { camera: { fStop: 1.4 } } }).project;
+    expect(obj(cam.id).camera).toMatchObject({ focalLength: cam.camera!.focalLength, fStop: 1.4 });
+    // A burst added from a few fields gets the remaining defaults; unset removes it.
+    p = run(p, "scene.updateObject", { sceneId, objectId: add.result.objectId, patch: { scatter: { burst: { frame: 12, speed: 7 } } } }).project;
+    expect(obj(add.result.objectId).scatter!.burst).toEqual({ frame: 12, speed: 7, spread: 30, direction: [0, 0, 1], gravity: 9.81, floor: 0, bounce: 0.35, spin: 12, stagger: 0.25 });
+    expect(obj(add.result.objectId).scatter!.count).toBe(40);
+    p = run(p, "scene.updateObject", { sceneId, objectId: add.result.objectId, unset: ["scatter.burst"] }).project;
+    expect(obj(add.result.objectId).scatter!.burst).toBeUndefined();
+  });
+
   it("validates animation keyframe arity", () => {
     let p = createProject({ name: "S" });
     const r = run(p, "scene.create", { name: "x", durationFrames: 60, template: "empty" });

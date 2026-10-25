@@ -1128,7 +1128,7 @@ export const COMMANDS = {
       objectId: IdSchema,
       patch: patchSchema(SceneObjectSchema.omit({ id: true, kind: true, animation: true }), { deep: true }).default({}),
       /** Optional settings to remove (a patch cannot express "absent"): the path also drops its pathProgress keys. */
-      unset: z.array(z.enum(["path", "text.sideMaterial", "camera.trackTargetId"])).default([]),
+      unset: z.array(z.enum(["path", "text.sideMaterial", "camera.trackTargetId", "scatter.burst"])).default([]),
     }),
     apply(p, { sceneId, objectId, patch, unset }) {
       const s = p.scenes.find((s) => s.id === sceneId);
@@ -1140,6 +1140,7 @@ export const COMMANDS = {
           o.animation = o.animation.filter((a) => a.property !== "pathProgress");
         } else if (u === "text.sideMaterial" && o.text) delete o.text.sideMaterial;
         else if (u === "camera.trackTargetId" && o.camera) delete o.camera.trackTargetId;
+        else if (u === "scatter.burst" && o.scatter) delete o.scatter.burst;
       }
       for (const [k, v] of Object.entries(patch)) {
         if (v === undefined) continue;
@@ -1147,7 +1148,8 @@ export const COMMANDS = {
         if (cur && typeof cur === "object" && !Array.isArray(cur) && typeof v === "object" && !Array.isArray(v)) Object.assign(cur, v);
         else (o as Record<string, unknown>)[k] = v;
       }
-      SceneObjectSchema.parse(JSON.parse(JSON.stringify(o)));
+      // Keep the parsed object: a nested settings object patched in part (scatter.burst) gets its defaults.
+      Object.assign(o, SceneObjectSchema.parse(JSON.parse(JSON.stringify(o))));
       assertSceneObjectAssets(p, o as SceneObject);
     },
   }),

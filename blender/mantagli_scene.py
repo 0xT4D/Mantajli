@@ -623,6 +623,114 @@ def add_scatter(spec, job):
     return obj, source
 
 
+MAX_BURST_PIECES = 2000
+# Half-height of each unit primitive lying flat (coins are 0.09 thick), so pieces rest on the floor.
+REST_HALF_HEIGHT = {"coin": 0.045, "plane": 0.0}
+
+
+def burst_flight(p0, v0, tau, g, floor, bounce):
+    """Position after `tau` s of flight from p0 with velocity v0 under gravity g, bouncing on the
+    plane z = floor (vertical speed x bounce, horizontal x 0.6 per bounce) until the rebound is
+    too weak (< 0.4 m/s); then the piece rests. Returns (position, rest time or None)."""
+    x, y, z = p0
+    vx, vy, vz = v0
+    z = max(z, floor)
+    t0 = 0.0
+    for _ in range(12):
+        if g <= 0:
+            dt = tau - t0
+            return (x + vx * dt, y + vy * dt, z + vz * dt), None
+        hit = (vz + math.sqrt(max(0.0, vz * vz + 2 * g * (z - floor)))) / g
+        if tau - t0 <= hit:
+            dt = tau - t0
+            return (x + vx * dt, y + vy * dt, z + vz * dt - 0.5 * g * dt * dt), None
+        x, y, z = x + vx * hit, y + vy * hit, floor
+        t0 += hit
+        vz = -(vz - g * hit) * bounce
+        vx, vy = vx * 0.6, vy * 0.6
+        if vz < 0.4:
+            return (x, y, floor), t0
+    return (x, y, floor), t0
+
+
+def add_burst(obj, spec, source, fps, n_frames):
+    """Scatter burst: one object per piece (sharing the piece mesh) with its flight baked as
+    keyframes on every frame, so motion blur and the saved .blend see the motion. Positions are
+    in scene space from the scatter object's transform; pieces are scaled 0 until they launch."""
+    sc = spec["scatter"]
+    b = sc["burst"]
+    pts, rots, scales = scatter_layout(sc)
+    if len(pts) > MAX_BURST_PIECES:
+        warn(f"{spec['name']}: burst limited to {MAX_BURST_PIECES} pieces")
+        pts, rots, scales = pts[:MAX_BURST_PIECES], rots[:MAX_BURST_PIECES], scales[:MAX_BURST_PIECES]
+    obj.hide_render = True
+    obj.hide_viewport = True
+    bpy.context.view_layer.update()
+    m = obj.matrix_world.copy()
+    obj_scale = sum(abs(s) for s in obj.matrix_world.to_scale()) / 3
+    Vector = __import__("mathutils").Vector
+    axis = Vector(b["direction"])
+    axis = axis.normalized() if axis.length > 1e-9 else Vector((0, 0, 1))
+    u = axis.orthogonal().normalized()
+    w = axis.cross(u)
+    rnd = random.Random(sc["seed"] * 7919 + 17)
+    half = REST_HALF_HEIGHT.get(sc["primitive"], 0.5) if not sc.get("modelAssetId") else 0.5
+    frames = list(range(1, n_frames + 1))
+    start = b["frame"] / fps
+    for i, (p, r, s) in enumerate(zip(pts, rots, scales)):
+        theta = math.radians(b["spread"]) * math.sqrt(rnd.random())
+        phi = rnd.uniform(0, 2 * math.pi)
+        d = axis * math.cos(theta) + (u * math.cos(phi) + w * math.sin(phi)) * math.sin(theta)
+        v0 = d * (b["speed"] * (0.65 + 0.35 * rnd.random()))
+        delay = b["stagger"] * rnd.random()
+        spin = [rnd.uniform(-1, 1) * b["spin"] for _ in range(3)]
+        size = s * obj_scale
+        p0 = m @ Vector(p)
+        floor = b["floor"] + half * size
+        piece = link(bpy.data.objects.new(f"{spec['name']} piece {i}", source.data))
+        locs, eulers, sizes = [], [], []
+        for f in frames:
+            tau = (f - 1) / fps - start - delay
+            if tau < 0:
+                locs.append(tuple(p0))
+                eulers.append(tuple(r))
+                sizes.append(0.0)
+                continue
+            pos, rest = burst_flight(tuple(p0), tuple(v0), tau, b["gravity"], floor, b["bounce"])
+            flying = tau if rest is None else rest
+            e = [r[k] + spin[k] * flying for k in range(3)]
+            if rest is not None:
+                # Settle flat (face up or down) over 0.25 s after coming to rest.
+                k = min(1.0, (tau - rest) / 0.25)
+                for a in (0, 1):
+                    flat = round(e[a] / math.pi) * math.pi
+                    e[a] = e[a] + (flat - e[a]) * k
+            locs.append(pos)
+            eulers.append(tuple(e))
+            sizes.append(size)
+        bake_channels(piece, frames, {"location": locs, "rotation_euler": eulers, "scale": [(v, v, v) for v in sizes]})
+
+
+def bake_channels(obj, frames, channels):
+    """One keyframe per frame on each channel (linear; scale steps are constant)."""
+    for path, values in channels.items():
+        setattr(obj, path, values[0])
+        obj.keyframe_insert(data_path=path, frame=frames[0])
+    for fc in fcurves_of(obj):
+        values = channels.get(fc.data_path)
+        if values is None:
+            continue
+        kps = fc.keyframe_points
+        kps.add(len(frames) - len(kps))
+        co = []
+        for f, v in zip(frames, values):
+            co += [f, v[fc.array_index]]
+        kps.foreach_set("co", co)
+        interp = 0 if fc.data_path == "scale" else 1  # CONSTANT / LINEAR
+        kps.foreach_set("interpolation", [interp] * len(frames))
+        fc.update()
+
+
 def add_path(obj, spec):
     """Smooth spline through the path points; the object follows it by pathProgress (0..1)."""
     p = spec["path"]
@@ -911,6 +1019,8 @@ def build(job):
             animate(obj, track)
         if kind == "camera" and o["camera"].get("shake", 0) > 0:
             add_shake(obj, o["camera"], fps["num"] / fps["den"], len(objects) + 1)
+        if kind == "scatter" and o["scatter"].get("burst") and o["visible"]:
+            add_burst(obj, o, source, fps["num"] / fps["den"], spec["durationFrames"])
         objects[o["id"]] = obj
 
     for cam, o in pending_track:

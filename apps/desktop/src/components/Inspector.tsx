@@ -512,6 +512,43 @@ function MultiClipInspector({ clips }: { clips: Clip[] }) {
   );
 }
 
+type Burst = NonNullable<NonNullable<SceneObject["scatter"]>["burst"]>;
+const BURST_DEFAULTS: Burst = { frame: 0, speed: 5, spread: 30, direction: [0, 0, 1], gravity: 9.81, floor: 0, bounce: 0.35, spin: 12, stagger: 0.25 };
+
+/** Scatter burst (pieces fly out at a scene frame, bounce on the floor and settle). Always sends the whole burst. */
+function BurstRows({ burst, set }: { burst?: Burst; set: (b: Burst | null, label: string) => void }) {
+  const b = burst;
+  const field = <K extends keyof Burst>(k: K, v: Burst[K], label: string) => set({ ...b!, [k]: v }, label);
+  return (
+    <>
+      <Row label="Burst" title="Pieces fly out from their layout at a scene frame, fall, bounce on the floor and settle — computed per frame, identical on every render">
+        <Toggle checked={!!b} onChange={(v) => set(v ? BURST_DEFAULTS : null, v ? "Add burst" : "Remove burst")} label={b ? "On" : "Off"} />
+      </Row>
+      {b && (
+        <>
+          <Row label="Start / stagger" title="Scene frame of the burst, and the seconds over which pieces launch">
+            <NumberField value={b.frame} min={0} step={1} unit="f" onChange={(v) => field("frame", v, "Burst start")} />
+            <NumberField value={b.stagger} min={0} max={5} step={0.05} unit="s" onChange={(v) => field("stagger", v, "Burst stagger")} />
+          </Row>
+          <Row label="Speed / spread" title="Launch speed (m/s) and cone half-angle (degrees) around the direction">
+            <NumberField value={b.speed} min={0} max={100} step={0.5} unit="m/s" onChange={(v) => field("speed", v, "Burst speed")} />
+            <NumberField value={b.spread} min={0} max={90} step={1} unit="°" onChange={(v) => field("spread", v, "Burst spread")} />
+          </Row>
+          <Vec3Row label="Direction" value={b.direction} step={0.1} onChange={(v) => field("direction", v, "Burst direction")} />
+          <Row label="Floor / bounce" title="Scene z of the floor the pieces land on, and how much speed a bounce keeps (0-0.9)">
+            <NumberField value={b.floor} step={0.1} unit="m" onChange={(v) => field("floor", v, "Burst floor")} />
+            <NumberField value={b.bounce} min={0} max={0.9} step={0.05} onChange={(v) => field("bounce", v, "Burst bounce")} />
+          </Row>
+          <Row label="Gravity / spin" title="Gravity (m/s²) and maximum tumble (rad/s)">
+            <NumberField value={b.gravity} min={0} max={100} step={0.5} onChange={(v) => field("gravity", v, "Burst gravity")} />
+            <NumberField value={b.spin} min={0} max={60} step={1} onChange={(v) => field("spin", v, "Burst spin")} />
+          </Row>
+        </>
+      )}
+    </>
+  );
+}
+
 /**
  * Transition presets (built-in and saved in the project): apply one to the clips in one
  * undo step, save the clip's transition as a preset, delete saved ones.
@@ -1073,6 +1110,10 @@ function SceneObjectInspector({ project, scene, obj }: { project: Project; scene
               <NumberField value={obj.scatter.rotationJitter} min={0} max={1} step={0.05} onChange={(v) => upd({ scatter: { rotationJitter: v } }, "Rotation jitter")} />
               <NumberField value={obj.scatter.seed} step={1} onChange={(v) => upd({ scatter: { seed: v } }, "Scatter seed")} />
             </Row>
+            <BurstRows
+              burst={obj.scatter.burst}
+              set={(b, label) => (b ? upd({ scatter: { burst: b } }, label) : cmd("scene.updateObject", { sceneId: scene.id, objectId: obj.id, unset: ["scatter.burst"] }, label))}
+            />
           </>
         )}
         {obj.particles && (

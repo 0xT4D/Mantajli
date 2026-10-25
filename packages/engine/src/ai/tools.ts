@@ -707,7 +707,7 @@ export const TOOLS: ToolDef[] = [
   tool({
     name: "scene_add_object",
     description:
-      "Add a mesh primitive, imported model (modelAssetId), particle field, media plane (kind=media: an imported image or video on an upright plane facing -Y; mediaWidth metres; mediaEmission>0 = glowing screen, 0 = lit print) or scatter (kind=scatter: count instances of primitive/modelAssetId laid out as box|pile|disc|ring|grid within scatterArea, sized size). Rotation in degrees; Blender axes (Z up, cameras typically look along +Y).",
+      "Add a mesh primitive, imported model (modelAssetId), particle field, media plane (kind=media: an imported image or video on an upright plane facing -Y; mediaWidth metres; mediaEmission>0 = glowing screen, 0 = lit print) or scatter (kind=scatter: count instances of primitive/modelAssetId laid out as box|pile|disc|ring|grid within scatterArea, sized size; scatterBurst makes them fly out from their layout at a scene frame - ballistic, bouncing on the floor z, settling flat: coin fountains, debris). Rotation in degrees; Blender axes (Z up, cameras typically look along +Y).",
     input: z.object({
       sceneId: Id,
       kind: z.enum(["mesh", "model", "particles", "media", "scatter"]),
@@ -728,6 +728,20 @@ export const TOOLS: ToolDef[] = [
       scatterDistribution: z.enum(SCATTER_DISTRIBUTIONS).optional(),
       scatterArea: Vec3.optional(),
       scatterSeed: z.number().int().optional(),
+      /** Burst from scene frame `frame`: launch speed m/s, cone spread degrees around direction, floor z, bounce 0-0.9, stagger seconds. */
+      scatterBurst: z
+        .object({
+          frame: z.number().int().min(0).optional(),
+          speed: z.number().min(0).max(100).optional(),
+          spread: z.number().min(0).max(90).optional(),
+          direction: Vec3.optional(),
+          gravity: z.number().min(0).max(100).optional(),
+          floor: z.number().optional(),
+          bounce: z.number().min(0).max(0.9).optional(),
+          spin: z.number().min(0).max(60).optional(),
+          stagger: z.number().min(0).max(5).optional(),
+        })
+        .optional(),
       material: z.enum(MATERIAL_PRESETS).optional(),
       color: Hex.optional(),
     }),
@@ -746,7 +760,7 @@ export const TOOLS: ToolDef[] = [
           ? { media: { assetId: i.mediaAssetId ?? fail("invalid_params", "mediaAssetId required for a media plane"), width: i.mediaWidth ?? 2, emission: i.mediaEmission ?? 1, sourceIn: i.mediaSourceIn ?? 0 } }
           : {}),
         ...(i.kind === "scatter"
-          ? { scatter: { primitive: i.primitive === "cube" ? "coin" : i.primitive, modelAssetId: i.modelAssetId, count: i.scatterCount ?? 300, distribution: i.scatterDistribution ?? "pile", area: i.scatterArea ?? [2, 2, 1], size: i.size === 1 ? 0.2 : i.size, seed: i.scatterSeed ?? 1 } }
+          ? { scatter: { primitive: i.primitive === "cube" ? "coin" : i.primitive, modelAssetId: i.modelAssetId, count: i.scatterCount ?? 300, distribution: i.scatterDistribution ?? "pile", area: i.scatterArea ?? [2, 2, 1], size: i.size === 1 ? 0.2 : i.size, seed: i.scatterSeed ?? 1, ...(i.scatterBurst ? { burst: i.scatterBurst } : {}) } }
           : {}),
         ...(i.material || i.color ? { material: { preset: i.material ?? "custom", baseColor: i.color ?? "#cccccc", metallic: i.material === "gold" || i.material === "chrome" ? 1 : 0, roughness: 0.3 } } : {}),
       };
@@ -851,11 +865,17 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "scene_update_object",
-    description: "Update a scene object's transform, visibility, material or kind-specific settings (camera/light/text/particles fields).",
-    input: z.object({ sceneId: Id, objectId: Id, patch: z.record(z.string(), z.unknown()) }),
+    description: "Update a scene object's transform, visibility, material or kind-specific settings (camera/light/text/particles/scatter fields, e.g. patch {scatter: {burst: {frame: 30, speed: 6}}} adds or changes a burst, fields left out take their defaults; unset removes a camera path, edge material, look-at target or burst).",
+    input: z.object({
+      sceneId: Id,
+      objectId: Id,
+      patch: z.record(z.string(), z.unknown()).default({}),
+      /** Settings to remove (a patch cannot express "absent"). */
+      unset: z.array(z.enum(["path", "text.sideMaterial", "camera.trackTargetId", "scatter.burst"])).optional(),
+    }),
     mutates: true,
     async run(ctx, i) {
-      session(ctx).dispatch("scene.updateObject", { sceneId: i.sceneId, objectId: i.objectId, patch: i.patch as never }, ctx.source, label("3D object update"));
+      session(ctx).dispatch("scene.updateObject", { sceneId: i.sceneId, objectId: i.objectId, patch: i.patch as never, unset: i.unset }, ctx.source, label("3D object update"));
       return { data: { ok: true } };
     },
   }),

@@ -406,6 +406,26 @@ export const SceneObjectSchema = z.object({
       /** Random rotation amount (0 = aligned, 1 = fully random). */
       rotationJitter: z.number().min(0).max(1).default(1),
       seed: z.number().int().default(1),
+      /**
+       * Burst (physics-lite): from scene frame `frame` the pieces launch from their layout
+       * positions inside a cone around `direction` (scene axes), fly under gravity, bounce on
+       * the floor (scene z = `floor`) and settle flat. Seeded and computed per frame by the
+       * scene script (no simulation cache), so every render of a frame is identical.
+       * Pieces are hidden until they launch (`stagger` spreads launches over seconds).
+       */
+      burst: z
+        .object({
+          frame: z.number().int().min(0).default(0),
+          speed: z.number().min(0).max(100).default(5),
+          spread: z.number().min(0).max(90).default(30),
+          direction: Vec3.default([0, 0, 1]),
+          gravity: z.number().min(0).max(100).default(9.81),
+          floor: z.number().default(0),
+          bounce: z.number().min(0).max(0.9).default(0.35),
+          spin: z.number().min(0).max(60).default(12),
+          stagger: z.number().min(0).max(5).default(0.25),
+        })
+        .optional(),
     })
     .optional(),
   /**
@@ -606,7 +626,11 @@ export type DeepPartial<T> = T extends readonly unknown[] ? T : T extends object
 
 function stripDefaults(t: z.ZodType, deep: boolean): z.ZodType {
   let cur: z.ZodType = t;
-  while (cur instanceof z.ZodDefault || cur instanceof z.ZodPrefault) cur = cur.unwrap() as z.ZodType;
+  // Deep patches also look through .optional() (the caller re-adds it): an optional settings
+  // object such as a scene object's `scatter` or `camera` is patched field by field, not parsed
+  // whole with every other field reset to its default.
+  while (cur instanceof z.ZodDefault || cur instanceof z.ZodPrefault || (deep && cur instanceof z.ZodOptional)) cur = cur.unwrap() as z.ZodType;
+  if (deep && cur instanceof z.ZodNullable && cur.unwrap() instanceof z.ZodObject) return patchSchema(cur.unwrap() as z.ZodObject, { deep: true }).nullable();
   if (deep && cur instanceof z.ZodObject) return patchSchema(cur, { deep: true });
   return cur;
 }
