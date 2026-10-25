@@ -1,6 +1,8 @@
 import {
   AudioLines,
   Box,
+  Mic,
+  Music,
   Diamond,
   Eye,
   EyeOff,
@@ -455,6 +457,18 @@ function InsertMenu({ project }: { project: Project }) {
             ] as const
           ).map(([k, label, icon]) => (
             <button key={k} type="button" className="flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] hover:bg-hover" onClick={() => void insert(k)}>
+              {icon}
+              {label}
+            </button>
+          ))}
+          <div className="mx-2 my-1 border-t border-line" />
+          {(
+            [
+              ["music", "Generate music…", <Music size={13} key="m" />],
+              ["voice", "Voice-over…", <Mic size={13} key="v" />],
+            ] as const
+          ).map(([k, label, icon]) => (
+            <button key={k} type="button" className="flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] hover:bg-hover" onClick={() => (setOpen(false), useStudio.getState().setDialog(k))}>
               {icon}
               {label}
             </button>

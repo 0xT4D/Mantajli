@@ -1,10 +1,14 @@
 import os from "node:os";
 import path from "node:path";
 import { SFX_KINDS, SFX_SPECS, sfxPlacement } from "../media/sfx.js";
+import { MUSIC_MOODS, MUSIC_SECTION_KINDS, MUSIC_STYLE_SPECS, MUSIC_STYLES } from "../media/music.js";
+import { captionCues, estimateSpeechSeconds } from "../voice/narration.js";
+import { TTS_PROVIDER_IDS, ttsProviders } from "../voice/tts.js";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import {
   COMMAND_NAMES,
+  projectDuration,
   EASINGS,
   CAMERA_MOVES,
   SCATTER_DISTRIBUTIONS,
@@ -14,6 +18,7 @@ import {
   KEYFRAME_PROPERTIES,
   SPEED_RAMP_PRESETS,
   CAPTION_STYLES,
+  captionLook,
   RENDER_PRESETS,
   RENDER_PRESET_IDS,
   BLEND_MODES,
@@ -1053,6 +1058,189 @@ export const TOOLS: ToolDef[] = [
         return { trackId, clipId: c.clipId };
       });
       return { data: { assetId: asset.id, ...r, start: place.start, frames: place.frames } };
+    },
+  }),
+  tool({
+    name: "music_generate",
+    description: `Compose an original music track (procedural synthesizer, not a neural model) and by default place it on a music track at \`start\`. Styles: ${MUSIC_STYLES.map((st) => `${st} (${MUSIC_STYLE_SPECS[st].bpm} BPM default) - ${MUSIC_STYLE_SPECS[st].description}`).join(" | ")}. Moods: ${MUSIC_MOODS.join(", ")}. The structure (intro, build, drop, breakdown, outro in 4/4 bars) is planned from the duration or given explicitly; its beat grid and sections are exact and become beat/downbeat/section markers, so cuts and titles can land on the drops. Returns section start frames.`,
+    input: z.object({
+      style: z.enum(MUSIC_STYLES),
+      mood: z.enum(MUSIC_MOODS).default("dark"),
+      /** Seconds; default: the timeline length (or 30 s when empty). */
+      duration: z.number().min(4).max(600).optional(),
+      bpm: z.number().min(60).max(180).optional(),
+      sections: z.array(z.object({ kind: z.enum(MUSIC_SECTION_KINDS), bars: z.number().int().min(1).max(256) })).max(32).optional(),
+      seed: z.number().int().min(0).max(1_000_000).default(1),
+      place: z.boolean().default(true),
+      start: Frame.default(0),
+      trackId: Id.optional(),
+      gainDb: z.number().min(-60).max(12).default(0),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      const s = session(ctx);
+      const fps = s.project.settings.fps.num / s.project.settings.fps.den;
+      const timeline = projectDuration(s.project);
+      const duration = i.duration ?? (timeline > 0 ? timeline / fps : 30);
+      const r = await ctx.engine.generateMusic({ style: i.style, mood: i.mood, duration, bpm: i.bpm, sections: i.sections, seed: i.seed }, ctx.source);
+      const toFrame = (sec: number) => i.start + Math.round(sec * fps);
+      const sections = r.sections.map((x) => ({ label: x.label, frame: toFrame(x.time), bars: x.bars }));
+      if (!i.place) return { data: { assetId: r.asset.id, bpm: r.bpm, duration, sections } };
+      const frames = Math.round(duration * fps);
+      const placed = s.transaction(label(`music ${i.style}`), ctx.source, (tx) => {
+        const busy = (id: string) => tx.project.tracks.find((t) => t.id === id)!.clips.some((c) => c.start < i.start + frames && c.start + c.duration > i.start);
+        let trackId = i.trackId ?? tx.project.tracks.find((t) => t.kind === "audio" && t.role === "music" && !busy(t.id))?.id;
+        if (!trackId) trackId = tx.dispatch("track.add", { kind: "audio", name: "Music", role: "music" }).trackId;
+        const c = tx.dispatch("clip.add", { trackId, clip: { type: "media", assetId: r.asset.id, start: i.start, duration: frames, name: `${i.style} ${i.mood}` }, mode: "error" });
+        if (i.gainDb) tx.dispatch("clip.update", { clipId: c.clipId, props: { volumeDb: i.gainDb } });
+        return { trackId, clipId: c.clipId };
+      });
+      const markers = ctx.engine.applyBeatMarkers(r.asset.id, ctx.source);
+      return { data: { assetId: r.asset.id, bpm: r.bpm, duration, ...placed, sections, markers } };
+    },
+  }),
+  tool({
+    name: "voice_providers",
+    description: "Text-to-speech engines this machine can use for narration, with their voices. Local: Windows voices (SAPI), eSpeak NG, Flite (robotic). Cloud (OpenAI, ElevenLabs) only when their API key is set; using them sends the script text to that provider.",
+    input: z.object({}),
+    mutates: false,
+    async run(ctx) {
+      const out = [];
+      for (const p of ttsProviders(ctx.engine.ffmpeg)) {
+        const st = await p.status();
+        const voices = st.available ? await p.voices().catch(() => []) : [];
+        out.push({ id: p.id, label: p.label, kind: p.kind, available: st.available, ...(st.reason ? { reason: st.reason } : {}), voices: voices.slice(0, 40) });
+      }
+      return { data: { providers: out } };
+    },
+  }),
+  tool({
+    name: "voice_narrate",
+    description:
+      "Voice-over from a script: each segment is spoken by a text-to-speech engine (provider/voice/rate; default the first available local engine), levelled for dialogue and placed on a dialogue-role 'Voice' track, one after another from `start` with `gapSeconds` between them (or at a segment's own start frame). Optional captions on a 'Captions' track are timed across each segment's real audio length (by text length, not speech recognition). duck=true turns on music ducking under the voice. dryRun=true only estimates the timing (no audio). Returns clip ids and frames per segment. Cloud providers receive the script text.",
+    input: z.object({
+      segments: z.array(z.object({ text: z.string().min(1).max(2000), start: Frame.optional(), voice: z.string().max(200).optional(), rate: z.number().min(0.5).max(2).optional() })).min(1).max(50),
+      provider: z.enum(TTS_PROVIDER_IDS).optional(),
+      voice: z.string().max(200).optional(),
+      rate: z.number().min(0.5).max(2).default(1),
+      pitch: z.number().min(-12).max(12).optional(),
+      /** Delivery for engines that accept direction (OpenAI): e.g. "calm documentary narrator". */
+      style: z.string().max(300).optional(),
+      start: Frame.default(0),
+      gapSeconds: z.number().min(0).max(10).default(0.35),
+      trackId: Id.optional(),
+      captions: z.boolean().default(true),
+      captionStyle: z.enum(CAPTION_STYLES).default("clean"),
+      captionPosition: z.enum(["bottom", "middle", "top"]).default("bottom"),
+      duck: z.boolean().default(true),
+      gainDb: z.number().min(-60).max(12).default(0),
+      dryRun: z.boolean().default(false),
+      /** false: speak the segments (assets in the bin, for listening) without placing them. */
+      place: z.boolean().default(true),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      const s = session(ctx);
+      const fps = s.project.settings.fps.num / s.project.settings.fps.den;
+      const gap = Math.round(i.gapSeconds * fps);
+      if (i.dryRun) {
+        let cursor = i.start;
+        const plan = i.segments.map((seg) => {
+          const frames = Math.max(1, Math.round(estimateSpeechSeconds(seg.text, seg.rate ?? i.rate) * fps));
+          const start = seg.start ?? cursor;
+          cursor = start + frames + gap;
+          return { text: seg.text, start, frames, estimated: true };
+        });
+        return { data: { segments: plan, endFrame: cursor - gap, note: `Estimated at ~150 words per minute × rate; real lengths depend on the voice.` } };
+      }
+      // Speak every segment first (no timeline change if one fails).
+      const spoken: ({ seg: (typeof i.segments)[number] } & Awaited<ReturnType<Engine["generateVoice"]>>)[] = [];
+      for (const seg of i.segments) {
+        const v = await ctx.engine.generateVoice({ text: seg.text, provider: i.provider, voice: seg.voice ?? i.voice, rate: seg.rate ?? i.rate, pitch: i.pitch, style: i.style }, ctx.source);
+        spoken.push({ seg, ...v });
+      }
+      if (!i.place) return { data: { provider: spoken[0]!.provider, segments: spoken.map((sp) => ({ text: sp.seg.text, assetId: sp.asset.id, path: sp.asset.path, seconds: sp.seconds })) } };
+      const W = s.project.settings.width;
+      const H = s.project.settings.height;
+      const look = captionLook(i.captionStyle, i.captionPosition, W, H);
+      const result = s.transaction(label("voice-over"), ctx.source, (tx) => {
+        const trackOf = (role: "dialogue", name: string) =>
+          tx.project.tracks.find((t) => t.kind === "audio" && t.role === role && t.name === name)?.id ?? tx.dispatch("track.add", { kind: "audio", name, role }).trackId;
+        const voiceTrack = i.trackId ?? trackOf("dialogue", "Voice");
+        let captionTrack: string | undefined;
+        let cursor = i.start;
+        const out = [];
+        for (const sp of spoken) {
+          const frames = Math.max(1, Math.round(sp.seconds * fps));
+          const start = sp.seg.start ?? cursor;
+          const c = tx.dispatch("clip.add", { trackId: voiceTrack, clip: { type: "media", assetId: sp.asset.id, start, duration: frames, name: sp.seg.text.slice(0, 60) }, mode: "error" });
+          if (i.gainDb) tx.dispatch("clip.update", { clipId: c.clipId, props: { volumeDb: i.gainDb } });
+          let captions = 0;
+          if (i.captions) {
+            captionTrack ??= tx.project.tracks.find((t) => t.kind === "text" && t.name === "Captions")?.id ?? tx.dispatch("track.add", { kind: "text", name: "Captions", index: 0 }).trackId;
+            for (const cue of captionCues(sp.seg.text, frames / fps)) {
+              const a = start + Math.round(cue.start * fps);
+              const b = start + Math.round(cue.end * fps);
+              if (b <= a) continue;
+              tx.dispatch("clip.add", { trackId: captionTrack, clip: { type: "text", text: cue.text, start: a, duration: b - a, style: look.style, animation: look.animation, transform: { y: look.y }, name: `Caption: ${cue.text.slice(0, 40)}` }, mode: "overwrite" });
+              captions++;
+            }
+          }
+          out.push({ text: sp.seg.text, clipId: c.clipId, assetId: sp.asset.id, start, frames, captions });
+          cursor = start + frames + gap;
+        }
+        if (i.duck && tx.project.tracks.some((t) => t.role === "music" && t.clips.length) && !tx.project.mix.ducking.enabled) tx.dispatch("project.setMix", { ducking: { enabled: true } });
+        return { trackId: voiceTrack, captionTrackId: captionTrack, segments: out, endFrame: cursor - gap };
+      });
+      return { data: { provider: spoken[0]!.provider, ...result, ducking: s.project.mix.ducking.enabled } };
+    },
+  }),
+  tool({
+    name: "voice_regenerate",
+    description: "Re-speak one voice-over clip (new text, voice, rate or provider) in place: same start and track, its captions on the Captions track retimed to the new audio. Other segments do not move (check for overlaps with project_get_state).",
+    input: z.object({
+      clipId: Id,
+      text: z.string().min(1).max(2000),
+      provider: z.enum(TTS_PROVIDER_IDS).optional(),
+      voice: z.string().max(200).optional(),
+      rate: z.number().min(0.5).max(2).default(1),
+      pitch: z.number().min(-12).max(12).optional(),
+      style: z.string().max(300).optional(),
+      captionStyle: z.enum(CAPTION_STYLES).default("clean"),
+      captionPosition: z.enum(["bottom", "middle", "top"]).default("bottom"),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      const s = session(ctx);
+      const found = findClip(s.project, i.clipId) ?? fail("not_found", `Clip ${i.clipId} not found`);
+      if (found.track.kind !== "audio" || found.clip.type !== "media") fail("invalid_params", "voice_regenerate needs a voice-over audio clip");
+      const old = found.clip;
+      const v = await ctx.engine.generateVoice({ text: i.text, provider: i.provider, voice: i.voice, rate: i.rate, pitch: i.pitch, style: i.style }, ctx.source);
+      const fps = s.project.settings.fps.num / s.project.settings.fps.den;
+      const frames = Math.max(1, Math.round(v.seconds * fps));
+      const look = captionLook(i.captionStyle, i.captionPosition, s.project.settings.width, s.project.settings.height);
+      const r = s.transaction(label("re-voice"), ctx.source, (tx) => {
+        tx.dispatch("clip.remove", { clipIds: [old.id] });
+        const c = tx.dispatch("clip.add", { trackId: found.track.id, clip: { type: "media", assetId: v.asset.id, start: old.start, duration: frames, name: i.text.slice(0, 60) }, mode: "error" });
+        if (old.volumeDb) tx.dispatch("clip.update", { clipId: c.clipId, props: { volumeDb: old.volumeDb } });
+        const cap = tx.project.tracks.find((t) => t.kind === "text" && t.name === "Captions");
+        let captions = 0;
+        if (cap) {
+          const stale = cap.clips.filter((x) => x.start >= old.start && x.start < old.start + old.duration && x.name.startsWith("Caption:")).map((x) => x.id);
+          if (stale.length) {
+            tx.dispatch("clip.remove", { clipIds: stale });
+            for (const cue of captionCues(i.text, frames / fps)) {
+              const a = old.start + Math.round(cue.start * fps);
+              const b = old.start + Math.round(cue.end * fps);
+              if (b <= a) continue;
+              tx.dispatch("clip.add", { trackId: cap.id, clip: { type: "text", text: cue.text, start: a, duration: b - a, style: look.style, animation: look.animation, transform: { y: look.y }, name: `Caption: ${cue.text.slice(0, 40)}` }, mode: "overwrite" });
+              captions++;
+            }
+          }
+        }
+        return { clipId: c.clipId, start: old.start, frames, previousFrames: old.duration, captions };
+      });
+      return { data: { assetId: v.asset.id, provider: v.provider, ...r } };
     },
   }),
   tool({

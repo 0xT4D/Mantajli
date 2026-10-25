@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdir, rename, stat } from "node:fs/promises";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   AssetSchema,
@@ -33,6 +33,8 @@ import { defaultFontFile, resolveFontFile } from "./render/fonts.js";
 import { ProjectSession } from "./session.js";
 import { exists, quickHash, safeName, sha1, writeFileAtomic } from "./util/fsx.js";
 import { encodeWav, synthesizeSfx, type SfxKind, type SfxOptions } from "./media/sfx.js";
+import { generateMusic, type MusicOptions, type MusicResult } from "./media/music.js";
+import { defaultTtsProvider, finishSpeech, ttsProviders, type TtsProviderId, type TtsRequest } from "./voice/tts.js";
 import { runFfmpeg } from "./media/ffmpeg.js";
 
 export const EXPORT_PRESET_SIZES: Record<string, { width: number; height: number; codec?: "prores" }> = {
@@ -245,6 +247,79 @@ export class Engine extends EventEmitter {
     const r = await this.importMedia([file], source);
     const id = r.imported[0]?.id ?? r.duplicates[0]?.assetId ?? fail("io_error", r.errors[0]?.message ?? "Sound effect import failed");
     return findAsset(s.project, id)!;
+  }
+
+  /**
+   * Compose an original track (see media/music.ts), import it, and record its exact beat grid
+   * and sections as the asset's analysis (they are known, not detected). Rendered as a background
+   * job; the same options reuse the same file.
+   */
+  async generateMusic(opts: MusicOptions, source: ChangeSource = "user"): Promise<{ asset: Asset; sections: MusicResult["sections"]; bpm: number }> {
+    const s = this.requireSession();
+    const key = sha1(JSON.stringify({ v: 1, ...opts })).slice(0, 10);
+    const file = path.join(s.dir, "generated", "music", `${opts.style}-${opts.mood}-${key}.wav`);
+    const { promise } = this.jobs.submit({ type: "music", label: `Compose ${opts.style} music`, key: `music:${key}` }, async (ctx) => {
+      const r = generateMusic(opts);
+      ctx.progress(0.9);
+      if (!(await exists(file))) await writeFileAtomic(file, encodeWav(r.left, r.right));
+      return r;
+    });
+    const r = (await promise) as MusicResult;
+    const imp = await this.importMedia([file], source);
+    const id = imp.imported[0]?.id ?? imp.duplicates[0]?.assetId ?? fail("io_error", imp.errors[0]?.message ?? "Music import failed");
+    const a = findAsset(s.project, id)!;
+    const beats = {
+      bpm: r.bpm,
+      times: r.beats,
+      strengths: r.beats.map((t, i) => (i % 4 === 0 ? 1 : r.sections.some((x) => x.label === "drop" && t >= x.time && t < x.time + x.bars * (240 / r.bpm)) ? 0.8 : 0.5)),
+      downbeats: r.downbeats,
+      onsets: [],
+      sections: r.sections.map((x) => ({ time: x.time, label: x.label, energy: x.energy })),
+      confidence: 1,
+      analyzedAt: new Date().toISOString(),
+    };
+    const tags = [...new Set([...a.tags, "generated", "music", opts.style, opts.mood, `${r.bpm} bpm`])];
+    s.applySystem("asset.update", { assetId: id, patch: { analysis: { ...a.analysis, beats }, tags } });
+    return { asset: findAsset(s.project, id)!, sections: r.sections, bpm: r.bpm };
+  }
+
+  /**
+   * Speak `text` with a TTS provider (default: the first available, local ones first), level it
+   * for dialogue and import it. Cached by provider + request, so regenerating unchanged text is free.
+   */
+  async generateVoice(req: TtsRequest & { provider?: TtsProviderId }, source: ChangeSource = "user"): Promise<{ asset: Asset; provider: TtsProviderId; seconds: number }> {
+    const s = this.requireSession();
+    const text = req.text.trim();
+    if (!text) fail("invalid_params", "Nothing to say: the text is empty");
+    const provider = req.provider
+      ? (ttsProviders(this.ffmpeg).find((p) => p.id === req.provider) ?? fail("invalid_params", `Unknown voice provider ${req.provider}`))
+      : ((await defaultTtsProvider(this.ffmpeg)) ?? fail("dependency_unavailable", "No text-to-speech engine is available (install espeak-ng, use Windows voices, or set OPENAI_API_KEY / ELEVENLABS_API_KEY)"));
+    const st = await provider.status();
+    if (!st.available) fail("dependency_unavailable", `${provider.label} is unavailable: ${st.reason}`);
+    const request = { text, voice: req.voice, rate: req.rate, pitch: req.pitch, style: req.style };
+    const key = sha1(JSON.stringify({ v: 1, p: provider.id, ...request })).slice(0, 12);
+    const file = path.join(s.dir, "generated", "voice", `voice-${provider.id}-${key}.wav`);
+    if (!(await exists(file))) {
+      const { promise } = this.jobs.submit({ type: "voice", label: `Voice: ${text.slice(0, 40)}`, key: `voice:${key}` }, async (ctx) => {
+        await mkdir(path.dirname(file), { recursive: true });
+        const raw = file.replace(/\.wav$/, ".raw.wav");
+        try {
+          await provider.synthesize(request, raw, ctx.signal);
+          ctx.progress(0.7);
+          await finishSpeech(this.ffmpeg, raw, file.replace(/\.wav$/, ".partial.wav"), ctx.signal);
+          await rename(file.replace(/\.wav$/, ".partial.wav"), file);
+        } finally {
+          await rm(raw, { force: true }).catch(() => {});
+        }
+      });
+      await promise;
+    }
+    const imp = await this.importMedia([file], source);
+    const id = imp.imported[0]?.id ?? imp.duplicates[0]?.assetId ?? fail("io_error", imp.errors[0]?.message ?? "Voice import failed");
+    const a = findAsset(s.project, id)!;
+    const tags = [...new Set([...a.tags, "generated", "voice", `tts:${provider.id}`, ...(req.voice ? [req.voice] : [])])];
+    s.applySystem("asset.update", { assetId: id, patch: { tags } });
+    return { asset: findAsset(s.project, id)!, provider: provider.id, seconds: a.meta.duration ?? 0 };
   }
 
   /** Generate missing thumbnails, waveforms, filmstrips and proxies as background jobs. */

@@ -322,7 +322,9 @@ export function detectSections(f: StructureFeatures, beats: number[] = []): Sect
   const inner = nov.slice(minGap / 2, nw - minGap / 2).sort((a, b) => a - b);
   const med = inner[Math.floor(inner.length / 2)] ?? 0;
   const mad = [...inner.map((v) => Math.abs(v - med))].sort((a, b) => a - b)[Math.floor(inner.length / 2)] ?? 0;
-  const thr = med + 1.2 * 1.4826 * mad;
+  // Capped: in a short piece with few changes most windows sit near a change, the median rises
+  // and the robust threshold would exceed even a 2-sd jump (a drop in a 20 s track).
+  const thr = Math.min(med + 1.2 * 1.4826 * mad, 2.5);
   // Greedy: strongest novelty peaks first, at least SEC_MIN apart and away from the ends.
   const cand = nov
     .map((v, w) => ({ v, w }))

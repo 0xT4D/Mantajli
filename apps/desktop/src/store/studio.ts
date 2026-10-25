@@ -109,7 +109,7 @@ interface StudioState {
   workspace: Workspace;
   snapping: boolean;
   toasts: Toast[];
-  dialog: null | "newProject" | "openProject" | "export" | "settings" | "autoEdit";
+  dialog: null | "newProject" | "openProject" | "export" | "settings" | "autoEdit" | "music" | "voice" | "soundDesign";
   aiPanelOpen: boolean;
 
   init(): Promise<void>;

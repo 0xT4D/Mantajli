@@ -9,6 +9,7 @@ export * from "./factories.js";
 export * from "./history.js";
 export * from "./ids.js";
 export * from "./migrate.js";
+export * from "./music.js";
 export * from "./sceneTemplates.js";
 export * from "./schema.js";
 export * from "./summary.js";
