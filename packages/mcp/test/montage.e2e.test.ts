@@ -27,7 +27,8 @@ async function call(name: string, args: Record<string, unknown> = {}) {
 beforeAll(async () => {
   await rm(projects, { recursive: true, force: true });
   await mkdir(home, { recursive: true });
-  await writeFile(path.join(home, "settings.json"), JSON.stringify({ projectsDir: projects }));
+  // The fixtures are an allowed AI media folder, wherever the checkout lives.
+  await writeFile(path.join(home, "settings.json"), JSON.stringify({ projectsDir: projects, aiMediaFolders: [path.join(TMP, "media")] }));
   await makeFixtures();
   const transport = new StdioClientTransport({
     command: process.execPath,

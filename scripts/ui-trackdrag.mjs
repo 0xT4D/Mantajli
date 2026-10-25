@@ -1,6 +1,6 @@
 // Dev utility: drag the "SFX" track header above "V1".
-import { chromium } from "playwright-core";
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+import { launchBrowser } from "./browser.mjs";
+const browser = await launchBrowser();
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
 await page.goto("http://127.0.0.1:1420/");
 await page.waitForTimeout(3500);

@@ -1,13 +1,13 @@
-// UI sweep: visit every workspace, dialog and inspector in headless Edge, collect console
+// UI sweep: visit every workspace, dialog and inspector headless (Edge on Windows, Chromium elsewhere), collect console
 // errors, and save one screenshot per state. Needs the engine (with a project open) and Vite.
 // Usage: node scripts/ui-sweep.mjs <outDir> [url]
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { chromium } from "playwright-core";
+import { launchBrowser } from "./browser.mjs";
 
 const out = process.argv[2] ?? "tests/.tmp/ui-sweep";
 mkdirSync(out, { recursive: true });
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await launchBrowser();
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(`console: ${m.text()}`));

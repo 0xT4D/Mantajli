@@ -21,7 +21,7 @@ const WINDOWS_FONTS: Record<string, [string, string]> = {
 
 function fontDirs(): string[] {
   if (process.platform === "win32") {
-    const win = process.env.WINDIR ?? "C:\Windows";
+    const win = process.env.WINDIR ?? "C:\\Windows";
     return [path.join(win, "Fonts"), path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "Windows", "Fonts")];
   }
   if (process.platform === "darwin") return ["/System/Library/Fonts/Supplemental", "/Library/Fonts"];

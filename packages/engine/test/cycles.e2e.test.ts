@@ -7,6 +7,7 @@ process.env.MANTAGLI_HOME = path.join(TMP, "home-cycles");
 const { Engine } = await import("../src/engine.js");
 const { executeTool } = await import("../src/ai/tools.js");
 const { matchingRenderPreset } = await import("@mantagli/core");
+const { findOnPath } = await import("../src/config.js");
 
 const engine = new Engine();
 afterAll(async () => {
@@ -32,7 +33,10 @@ describe("Cycles quality presets", () => {
     expect(out.rendered).toBe(1);
     const device = engine.deps.blender?.cyclesDevice;
     expect(device).toBeDefined();
-    // This machine has an NVIDIA RTX GPU; elsewhere CPU fallback is valid.
-    if (process.env.MANTAGLI_EXPECT_GPU !== "0") expect(["OPTIX", "CUDA", "HIP", "METAL", "ONEAPI"]).toContain(device);
+    // With an NVIDIA driver installed (the dev machine's RTX) Cycles must pick the GPU;
+    // elsewhere CPU fallback is valid. MANTAGLI_EXPECT_GPU=1/0 forces either expectation.
+    const expectGpu = process.env.MANTAGLI_EXPECT_GPU ? process.env.MANTAGLI_EXPECT_GPU !== "0" : !!(await findOnPath("nvidia-smi"));
+    if (expectGpu) expect(["OPTIX", "CUDA", "HIP", "METAL", "ONEAPI"]).toContain(device);
+    else expect(["OPTIX", "CUDA", "HIP", "METAL", "ONEAPI", "CPU"]).toContain(device);
   });
 });

@@ -19,6 +19,7 @@ export interface AppInfo {
     recentProjects: string[];
     aiModel: string;
     aiAutonomy: "review" | "autonomous";
+    aiMediaFolders: string[];
     previewScale: number;
     autoRenderScenes: boolean;
     ui: Record<string, unknown>;

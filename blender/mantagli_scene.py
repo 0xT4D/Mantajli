@@ -71,8 +71,8 @@ def set_engine(scene, spec, quality):
             scene.eevee.use_raytracing = bool(r.get("raytracing", False)) and not draft
     elif engine == "CYCLES":
         scene.cycles.samples = samples
-        scene.cycles.use_denoising = bool(r["denoise"])
-        enable_gpu(scene)
+        backend = enable_gpu(scene)
+        set_denoiser(scene, bool(r["denoise"]), backend)
     scene.render.use_motion_blur = bool(r["motionBlur"])
     scene.render.motion_blur_shutter = r["shutter"]
     scene.render.film_transparent = bool(r["transparent"])
@@ -107,13 +107,35 @@ def enable_gpu(scene):
                         d.use = d.type == backend
                     scene.cycles.device = "GPU"
                     out("MANTAGLI_INFO", {"cyclesDevice": backend})
-                    return
+                    return backend
             except TypeError:
                 continue
     except Exception as e:  # noqa: BLE001
         warn(f"GPU setup failed, using CPU: {e}")
     scene.cycles.device = "CPU"
     out("MANTAGLI_INFO", {"cyclesDevice": "CPU"})
+    return "CPU"
+
+
+def set_denoiser(scene, wanted, backend):
+    """OpenImageDenoise when this build has it (official builds do; some Linux distro builds
+    do not), else OptiX on an OptiX GPU, else no denoising (a warning, not a failed render)."""
+    scene.cycles.use_denoising = False
+    if not wanted:
+        return
+    try:
+        import _cycles
+        has_oidn = bool(getattr(_cycles, "with_openimagedenoise", True))
+    except ImportError:
+        has_oidn = True
+    if has_oidn:
+        scene.cycles.denoiser = "OPENIMAGEDENOISE"
+    elif backend == "OPTIX":
+        scene.cycles.denoiser = "OPTIX"
+    else:
+        warn("this Blender build has no OpenImageDenoise; Cycles renders are not denoised")
+        return
+    scene.cycles.use_denoising = True
 
 
 def setup_world(scene, spec):

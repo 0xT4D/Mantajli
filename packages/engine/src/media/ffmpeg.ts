@@ -37,6 +37,33 @@ export async function runFfmpeg(ffmpeg: string, args: string[], opts: FfmpegRunO
   return r;
 }
 
+const majorVersions = new Map<string, Promise<number | undefined>>();
+
+/** Major version of an FFmpeg binary (cached); undefined for git builds ("N-…", dated). */
+export function ffmpegMajorVersion(ffmpeg: string): Promise<number | undefined> {
+  let v = majorVersions.get(ffmpeg);
+  if (!v) {
+    v = run(ffmpeg, ["-hide_banner", "-version"], { timeoutMs: 15000 }).then(
+      (r) => {
+        const m = /^ffmpeg version n?(\d+)\.\d+/.exec(r.stdout);
+        return m ? Number(m[1]) : undefined;
+      },
+      () => undefined,
+    );
+    majorVersions.set(ffmpeg, v);
+  }
+  return v;
+}
+
+/**
+ * Arguments that read the filter graph from `file`: `-/filter_complex` (FFmpeg 7+,
+ * where `-filter_complex_script` is deprecated), or the script option on older builds.
+ */
+export async function filterGraphFileArgs(ffmpeg: string, file: string): Promise<string[]> {
+  const major = await ffmpegMajorVersion(ffmpeg);
+  return major !== undefined && major < 7 ? ["-filter_complex_script", file] : ["-/filter_complex", file];
+}
+
 /**
  * Stream-decode audio to mono float32 PCM at `sampleRate`, delivering chunks
  * so callers can aggregate without holding the whole file in memory.

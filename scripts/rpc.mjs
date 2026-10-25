@@ -3,7 +3,14 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import WebSocket from "ws";
-const home = process.env.MANTAGLI_HOME ?? path.join(process.env.APPDATA ?? path.join(os.homedir(), ".config"), "Mantagli");
+// Same location as engine/src/config.ts appDataDir().
+const home =
+  process.env.MANTAGLI_HOME ??
+  (process.platform === "win32"
+    ? path.join(process.env.APPDATA ?? path.join(os.homedir(), "AppData", "Roaming"), "Mantagli")
+    : process.platform === "darwin"
+      ? path.join(os.homedir(), "Library", "Application Support", "Mantagli")
+      : path.join(process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config"), "mantagli"));
 const { port, token } = JSON.parse(readFileSync(path.join(home, "engine.json"), "utf8"));
 const ws = new WebSocket(`ws://127.0.0.1:${port}/rpc?token=${token}`);
 ws.on("open", () => ws.send(JSON.stringify({ id: 1, method: process.argv[2], params: JSON.parse(process.argv[3] ?? "{}") })));

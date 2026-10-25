@@ -1,7 +1,7 @@
 // Dev utility: scrub + drag interactions in Edge, then screenshot.
-import { chromium } from "playwright-core";
+import { launchBrowser } from "./browser.mjs";
 const out = process.argv[2];
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await launchBrowser();
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
 const logs = [];
 page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));

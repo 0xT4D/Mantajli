@@ -1,7 +1,7 @@
 // Dev utility: drag a bin item onto the timeline with real pointer events.
-import { chromium } from "playwright-core";
+import { launchBrowser } from "./browser.mjs";
 const [out, fx, fy, tx, ty] = process.argv.slice(2);
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await launchBrowser();
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
 const logs = [];
 page.on("pageerror", (e) => logs.push(`pageerror: ${e.message}`));

@@ -10,7 +10,7 @@ await engine.init();
 let p = createProject({ name: "sample", format: "landscape", fps: { num: 24, den: 1 } });
 p = applyCommand(p, "scene.create", { name: "Sample", durationFrames: 24, template: template as "chromeTitle", text: "MANTAGLI", ...(process.env.FOG ? { fog: Number(process.env.FOG) } : {}) }).project;
 const res = await renderSceneFrames(
-  { project: p, scene: p.scenes[0]!, quality: "final", resolutionScale: 0.5, defaultFont: "C:\Windows\Fonts\ariblk.ttf" },
+  { project: p, scene: p.scenes[0]!, quality: "final", resolutionScale: 0.5, defaultFont: "C:/Windows/Fonts/ariblk.ttf" },
   { blender: engine.blender, outputDir: out, frames: [Number(frame)] },
 );
 console.log(JSON.stringify(res));

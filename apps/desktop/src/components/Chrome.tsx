@@ -464,6 +464,13 @@ export function SettingsDialog() {
           <Row label="Mode">
             <Select value={s.aiAutonomy} onChange={(v) => void updateSettings({ aiAutonomy: v })} options={[{ value: "review", label: "Review — ask before exports and large deletions" }, { value: "autonomous", label: "Autonomous — apply without asking" }]} />
           </Row>
+          <Row label="Media folders" title="Besides your Videos, Music, Pictures, Downloads, Desktop and Documents folders and the project folder, the AI may import from and export to these folders. Separate folders with ;">
+            <TextField
+              value={s.aiMediaFolders.join("; ")}
+              placeholder="e.g. D:\Footage; D:\Music"
+              onCommit={(v) => void updateSettings({ aiMediaFolders: v.split(";").map((d) => d.trim()).filter(Boolean) })}
+            />
+          </Row>
           <div className="text-[10px] text-mute">API key: {info.ai.hasKey ? "configured" : "not set"} (set it in the AI panel). Claude Code can also drive Mantagli through the MCP server — see README.</div>
         </div>
       </div>

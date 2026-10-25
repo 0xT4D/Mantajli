@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { makeFixtures, TMP } from "./fixtures.js";
+import { FIXTURES, makeFixtures, TMP } from "./fixtures.js";
 
 process.env.MANTAGLI_HOME = path.join(TMP, "home-otio");
 const { Engine } = await import("../src/engine.js");
@@ -25,6 +25,8 @@ describe("OpenTimelineIO interchange", () => {
   it("exports a timeline as otio_json and imports it back losslessly", async () => {
     await engine.init();
     const media = await makeFixtures();
+    // The fixtures folder is an allowed AI media folder (as if the user added it in Settings).
+    await engine.config.update({ aiMediaFolders: [FIXTURES] });
     await rm(dir, { recursive: true, force: true });
     await mkdir(dir, { recursive: true });
 

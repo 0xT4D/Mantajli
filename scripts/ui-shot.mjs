@@ -1,8 +1,8 @@
-// Dev utility: screenshot the UI in Microsoft Edge (no browser download).
+// Dev utility: screenshot the UI headless (Edge on Windows, Chromium elsewhere; see browser.mjs).
 // Usage: node scripts/ui-shot.mjs <out.png> [url] [actionsJson]
-import { chromium } from "playwright-core";
+import { launchBrowser } from "./browser.mjs";
 const [out = "ui.png", url = "http://127.0.0.1:1420/", actions = "[]"] = process.argv.slice(2);
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await launchBrowser();
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
 const logs = [];
 page.on("console", (m) => (m.type() === "error" || m.type() === "warning") && logs.push(`${m.type()}: ${m.text()}`));

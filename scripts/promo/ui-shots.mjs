@@ -1,10 +1,10 @@
 // 4K screenshots of the running app (engine + Vite) showing the promo project.
 // Usage: node scripts/promo/ui-shots.mjs <outDir>
 import path from "node:path";
-import { chromium } from "playwright-core";
+import { launchBrowser } from "../browser.mjs";
 
 const out = process.argv[2] ?? "D:/MantagliPromo/media";
-const browser = await chromium.launch({ channel: "msedge", headless: true });
+const browser = await launchBrowser();
 const page = await browser.newPage({ viewport: { width: 1920, height: 1080 }, deviceScaleFactor: 2 });
 await page.goto("http://127.0.0.1:1420/");
 await page.waitForTimeout(4000);

@@ -3,9 +3,9 @@
  * built only through Mantagli's AI tool layer (the tools the Director and MCP
  * clients use). 1080x1920, 30 fps, 24 s, original score and sound effects.
  *
- *   node scripts/benchmark/score.mjs D:/MantagliBenchmark/media/neon_quest_score.wav
+ *   node scripts/benchmark/score.mjs <root>/media/neon_quest_score.wav   (root: see ROOT below)
  *   npx tsx scripts/benchmark/build.ts build     # project, analysis, scenes, bake, timeline
- *   npx tsx scripts/benchmark/build.ts stills    # review frames -> D:/MantagliBenchmark/review
+ *   npx tsx scripts/benchmark/build.ts stills    # review frames -> <root>/review
  *   npx tsx scripts/benchmark/build.ts export    # final export + verification
  *
  * Shot plan (frames at 30 fps; the score drops at 4 s and 14 s):
@@ -20,7 +20,8 @@
 import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 
-const ROOT = "D:/MantagliBenchmark";
+// MANTAGLI_BENCH_ROOT moves the project/renders (default: D: on the dev machine, tests/.tmp elsewhere).
+const ROOT = process.env.MANTAGLI_BENCH_ROOT ?? (process.platform === "win32" ? "D:/MantagliBenchmark" : path.resolve(import.meta.dirname, "../../tests/.tmp/benchmark"));
 const MEDIA = path.join(ROOT, "media");
 process.env.MANTAGLI_HOME = path.join(ROOT, "home");
 const { Engine, executeTool } = await import("../../packages/engine/src/index.ts");
@@ -35,7 +36,8 @@ const tool = async (name: string, input: Record<string, unknown>) => {
 };
 const PROJECT = path.join(ROOT, "Neon Quest.mantagli");
 const TOTAL = 720;
-const FONT = "Bahnschrift";
+// Without Bahnschrift (non-Windows) FFmpeg asks fontconfig for the closest match.
+const FONT = process.env.MANTAGLI_BENCH_FONT ?? "Bahnschrift";
 
 if (stage === "build") {
   await mkdir(ROOT, { recursive: true });

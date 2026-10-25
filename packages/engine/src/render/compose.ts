@@ -1,7 +1,7 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fail, newId, type CompositionPlan, type ExportSettings, type Project, type TextClip, type Asset } from "@mantagli/core";
-import { runFfmpeg } from "../media/ffmpeg.js";
+import { filterGraphFileArgs, runFfmpeg } from "../media/ffmpeg.js";
 import { exists } from "../util/fsx.js";
 import { run } from "../util/proc.js";
 import { buildGraph, type SceneFrames } from "./ffgraph.js";
@@ -49,7 +49,7 @@ export async function compose(opts: ComposeOptions): Promise<{ outPath: string; 
 
   const args: string[] = [];
   for (const i of graph.inputs) args.push(...i);
-  args.push("-/filter_complex", "graph.txt", "-map", `[${graph.videoLabel}]`);
+  args.push(...(await filterGraphFileArgs(opts.ffmpeg, "graph.txt")), "-map", `[${graph.videoLabel}]`);
   if (graph.audioLabel) args.push("-map", `[${graph.audioLabel}]`);
 
   await mkdir(path.dirname(opts.outPath), { recursive: true });

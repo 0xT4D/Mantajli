@@ -99,6 +99,8 @@ const label = (tool: string) => `AI: ${tool}`;
 function mediaRoots(ctx: ToolContext): string[] {
   const home = os.homedir();
   const roots = ["Videos", "Music", "Pictures", "Downloads", "Desktop", "Documents"].map((d) => path.join(home, d));
+  // Folders the user added in Settings (e.g. footage on another drive).
+  roots.push(...ctx.engine.config.settings.aiMediaFolders.filter((d) => path.isAbsolute(d)));
   const s = ctx.engine.session;
   if (s) roots.push(path.dirname(s.dir), s.dir);
   return roots;
@@ -255,7 +257,7 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "media_import",
-    description: "Import media files by absolute path (originals are referenced, never modified). Allowed locations: the user's Videos, Music, Pictures, Downloads, Desktop, Documents folders and the project folder.",
+    description: "Import media files by absolute path (originals are referenced, never modified). Allowed locations: the user's Videos, Music, Pictures, Downloads, Desktop, Documents folders, folders the user added in Settings, and the project folder.",
     input: z.object({ paths: z.array(z.string().min(1)).min(1).max(100) }),
     mutates: true,
     async run(ctx, i) {
