@@ -142,8 +142,10 @@ export class EngineServer {
     "render.scene": (p) => this.engine.renderScene(String(p.sceneId), { quality: (p.quality as "draft" | "final") ?? "draft", scale: Number(p.scale ?? 0.5), frames: p.frames as number[] | undefined }),
     "render.sceneCache": async (p) => {
       const { dir, key } = this.engine.sceneCacheDir(String(p.sceneId), (p.quality as "draft" | "final") ?? "draft", Number(p.scale ?? 0.5));
-      const { existingFrames } = await import("./render/blender.js");
-      return { dir, key, frames: (await existingFrames(dir)).size };
+      const { existingFrames, toRanges } = await import("./render/blender.js");
+      const have = [...(await existingFrames(dir))].sort((a, b) => a - b);
+      // ranges: which frames exist (inclusive), so the live preview never asks for a missing one.
+      return { dir, key, frames: have.length, ranges: toRanges(have) };
     },
     "render.validate": (p) => this.engine.validateRender({ preset: p.preset as string | undefined }),
     "render.export": (p) => {
@@ -209,15 +211,17 @@ export class EngineServer {
   }
 
   private async serveFile(req: http.IncomingMessage, res: http.ServerResponse, file: string): Promise<void> {
+    // Errors carry the CORS header too, so the browser reports them as what they are (not as CORS failures).
+    const cors = { "Access-Control-Allow-Origin": "*" };
     if (!this.allowedFile(file)) {
-      res.writeHead(403).end("forbidden");
+      res.writeHead(403, cors).end("forbidden");
       return;
     }
     let st;
     try {
       st = await stat(file);
     } catch {
-      res.writeHead(404).end("not found");
+      res.writeHead(404, cors).end("not found");
       return;
     }
     const type = MIME[path.extname(file).toLowerCase()] ?? "application/octet-stream";

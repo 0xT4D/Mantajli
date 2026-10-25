@@ -112,6 +112,22 @@ describe("adjustment layers and lens effects", () => {
     expect(col.slice(8, 12).every((v) => Math.abs(v - 128) < 6)).toBe(true);
   });
 
+  it("darkens with the core vignette formula (shared with the live preview)", async () => {
+    const { vignetteFactor } = await import("@mantagli/core");
+    const s = await fresh("vignette");
+    const v1 = s.project.tracks.find((t) => t.name === "V1")!.id;
+    const c = s.dispatch("clip.add", { trackId: v1, clip: { type: "color", fill: "#ffffff", start: 0, duration: 10 } });
+    s.dispatch("effect.add", { clipId: c.clipId, type: "vignette", params: { amount: 0.8 } });
+    const px = await still(0, 0.25, "vignette");
+    // Along the diagonal from the centre to a corner (BT.709 round trip: allow ±4 levels).
+    for (const t of [0, 0.25, 0.5, 0.75, 0.95]) {
+      const x = px.w / 2 + t * (px.w / 2 - 1);
+      const y = px.h / 2 + t * (px.h / 2 - 1);
+      const want = 255 * vignetteFactor(Math.round(x), Math.round(y), px.w, px.h, 0.8);
+      expect(Math.abs(px.at(x, y)[1] - want), `t=${t}: ${px.at(x, y)[1]} vs ${want.toFixed(1)}`).toBeLessThanOrEqual(4);
+    }
+  });
+
   it("finishes the whole frame with the CRT look on an adjustment layer", async () => {
     const s = await fresh("crt", "vertical");
     const v1 = s.project.tracks.find((t) => t.name === "V1")!.id;

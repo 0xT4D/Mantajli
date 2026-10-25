@@ -73,8 +73,8 @@ export function Viewer() {
     void (async () => {
       for (const s of project.scenes) {
         try {
-          const r = await engine.call<{ dir: string; frames: number }>("render.sceneCache", { sceneId: s.id, quality: "draft", scale });
-          if (alive && r.frames > 0) compositor.current!.sceneDirs.set(s.id, r.dir);
+          const r = await engine.call<{ dir: string; frames: number; ranges: [number, number][] }>("render.sceneCache", { sceneId: s.id, quality: "draft", scale });
+          if (alive && r.frames > 0) compositor.current!.sceneDirs.set(s.id, { dir: r.dir, ranges: r.ranges });
           else compositor.current!.sceneDirs.delete(s.id);
         } catch {
           /* scene removed */

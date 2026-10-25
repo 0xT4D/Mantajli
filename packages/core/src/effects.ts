@@ -48,6 +48,26 @@ export function lensSource(x: number, y: number, W: number, H: number, k: { k1: 
   return [cx + dx * m, cy + dy * m];
 }
 
+/** Lens angle of the vignette effect (FFmpeg `vignette` angle, radians) for an amount 0..1. */
+export function vignetteAngle(amount: number): number {
+  return 0.15 + amount;
+}
+
+/**
+ * Brightness factor of the vignette at pixel (x, y) of a W×H frame: FFmpeg's natural
+ * vignetting cos⁴(angle · d), d = distance from the centre / half diagonal.
+ */
+export function vignetteFactor(x: number, y: number, W: number, H: number, amount: number): number {
+  const d = Math.hypot(x - W / 2, y - H / 2) / Math.hypot(W / 2, H / 2);
+  const c = Math.cos(vignetteAngle(amount) * Math.min(1, d));
+  return c * c * c * c;
+}
+
+/** Standard deviation (8-bit levels) of the film grain effect: FFmpeg `noise` Gaussian, strength/√3. */
+export function grainSigma(amount: number): number {
+  return Math.round(amount) / Math.sqrt(3);
+}
+
 /** Height of each letterbox bar as a fraction of the frame height (0 when the frame is already wider). */
 export function letterboxBar(ratio: string, width: number, height: number): number {
   const r = Number(ratio);

@@ -32,6 +32,7 @@ import {
   lensCoefficients,
   transitionFx,
   cropsToFrameCell,
+  vignetteAngle,
 } from "@mantagli/core";
 
 /**
@@ -49,7 +50,7 @@ import {
  * bump it whenever the same plan renders different pixels (a fixed or changed
  * effect, transition or text renderer), so cached previews are not reused.
  */
-export const RENDERER_VERSION = 6;
+export const RENDERER_VERSION = 7;
 
 export interface SceneFrames {
   /** Directory of rendered PNG frames named frame_00001.png (1-based). */
@@ -231,7 +232,9 @@ function effectStatements(effects: Effect[], inLabel: string, id: string, px: nu
         break;
       }
       case "vignette":
-        chain.push(`vignette=angle=${n6(0.15 + num("amount") * 1.0)}`);
+        // In RGB: on YUV FFmpeg scales limited-range luma (not Y-16) and the falloff no longer
+        // follows cos^4 (core vignetteFactor, also used by the live preview).
+        chain.push("format=gbrp", `vignette=angle=${n6(vignetteAngle(num("amount")))}`);
         break;
       case "glow": {
         chain.push("format=gbrp");

@@ -6,6 +6,7 @@ import {
   findAsset,
   fpsValue,
   glitchAt,
+  grainSigma,
   cropsToFrameCell,
   isConstant,
   lensCoefficients,
@@ -18,6 +19,7 @@ import {
   textLinesAt,
   transitionFx,
   transitionMask,
+  vignetteFactor,
   type Asset,
   type BlendMode,
   type Clip,
@@ -46,7 +48,8 @@ export class LiveCompositor {
   private playing = false;
   /** Called when an async source (seek/image load) becomes ready. */
   onNeedsRedraw?: () => void;
-  sceneDirs = new Map<string, string>();
+  /** Draft 3D frame caches per scene: folder and the (inclusive) ranges of frames rendered so far. */
+  sceneDirs = new Map<string, { dir: string; ranges: [number, number][] }>();
 
   constructor(private dir: () => string | undefined) {}
 
@@ -141,10 +144,11 @@ export class LiveCompositor {
           if (v.readyState >= 2) [src, sw, sh] = [v, v.videoWidth, v.videoHeight];
         }
       } else if (clip.type === "scene") {
-        const dir = this.sceneDirs.get(clip.sceneId);
+        const cache = this.sceneDirs.get(clip.sceneId);
         const f = 1 + Math.round(layer.sourceStart * fps);
-        if (dir) {
-          const img = this.image(engine.fileUrl(`${dir}/frame_${String(f).padStart(5, "0")}.png`)!, this.sceneFrames);
+        // Only frames known to be rendered are requested (a partial cache would otherwise 404 per frame).
+        if (cache && cache.ranges.some(([a, b]) => f >= a && f <= b)) {
+          const img = this.image(engine.fileUrl(`${cache.dir}/frame_${String(f).padStart(5, "0")}.png`)!, this.sceneFrames);
           if (img.complete && img.naturalWidth) [src, sw, sh] = [img, img.naturalWidth, img.naturalHeight];
           else if (img.complete) sceneMissing = true;
         } else sceneMissing = true;
@@ -155,12 +159,15 @@ export class LiveCompositor {
         }
       }
 
-      // Glitch bursts (R/B split) and shape masks need the layer drawn offscreen first.
-      const split = Math.round((glitchShift(clip, clipFrame) + tfx.rgbShift) * W);
+      // Glitch bursts and chromatic aberration (R/B split) and shape masks need the layer drawn offscreen first.
+      const split = Math.round((glitchShift(clip, clipFrame) + tfx.rgbShift) * W) - aberrationShift(clip, k);
       const masks = clip.effects.filter((e) => e.enabled && e.type === "mask");
       const stylized = clip.effects.some((e) => e.enabled && STYLIZE_LIVE.has(e.type));
+      // Pictures (media, 3D) are stylized in their own fit-scaled space, as the export does;
+      // colour, text and adjustment layers are frame-sized there, so the frame is their space.
+      const styleInLayer = stylized && (clip.type === "media" || clip.type === "scene");
       const smear = tfx.blurRadius >= 1;
-      const offscreen = split !== 0 || masks.length > 0 || stylized || smear;
+      const offscreen = split !== 0 || masks.length > 0 || (stylized && !styleInLayer) || smear;
       const out = ctx;
       if (offscreen) ctx = this.scratch(0, W, H);
       ctx.save();
@@ -198,7 +205,8 @@ export class LiveCompositor {
         dh *= st.scale;
         if (mask) clipMask(ctx, mask, dw, dh);
         // Slides/whips move the framed picture, not a fill-fit source's overflow (as the export).
-        if (curves.scale.every(isConstant) && cropsToFrameCell(clip, layer.transitionOut)) {
+        const cellCrop = curves.scale.every(isConstant) && cropsToFrameCell(clip, layer.transitionOut);
+        if (cellCrop) {
           ctx.beginPath();
           ctx.rect(-W / 2, -H / 2, W, H);
           ctx.clip();
@@ -212,7 +220,17 @@ export class LiveCompositor {
         } catch {
           keyedSrc = undefined; // tainted source: show it unkeyed rather than nothing
         }
-        if (keyedSrc) ctx.drawImage(keyedSrc, -dw / 2, -dh / 2, dw, dh);
+        if (styleInLayer) {
+          // The export crops a frame-cell layer before its effects, so they see only that part.
+          const [lw, lh] = cellCrop ? [Math.min(dw, W), Math.min(dh, H)] : [dw, dh];
+          const [fx, fy] = [lw / dw, lh / dh];
+          const region = keyedSrc
+            ? [(keyedSrc.width * (1 - fx)) / 2, (keyedSrc.height * (1 - fy)) / 2, keyedSrc.width * fx, keyedSrc.height * fy]
+            : [cx0 + (cw * (1 - fx)) / 2, cy0 + (ch * (1 - fy)) / 2, cw * fx, ch * fy];
+          const styled = this.stylizedPicture(keyedSrc ?? src, region, lw, lh, ctx.filter, clip, W, H, k, frame);
+          ctx.filter = "none"; // already applied inside the layer
+          ctx.drawImage(styled, -lw / 2, -lh / 2, lw, lh);
+        } else if (keyedSrc) ctx.drawImage(keyedSrc, -dw / 2, -dh / 2, dw, dh);
         else ctx.drawImage(src, cx0, cy0, cw, ch, -dw / 2, -dh / 2, dw, dh);
       }
       ctx.restore();
@@ -220,7 +238,7 @@ export class LiveCompositor {
         ctx = out;
         let layerCanvas = split ? this.channelSplit(W, H, split) : this.scratchCanvases[0]!;
         if (smear) layerCanvas = this.smear(layerCanvas, W, H, tfx.blurAngle, tfx.blurRadius);
-        if (stylized) layerCanvas = this.stylize(layerCanvas, clip, W, H, k);
+        if (stylized && !styleInLayer) layerCanvas = this.stylize(layerCanvas, clip, W, H, k, frame);
         if (masks.length) applyMasks(layerCanvas, masks, W, H);
         ctx.save();
         ctx.globalAlpha = st.opacity;
@@ -279,11 +297,12 @@ export class LiveCompositor {
 
   /**
    * Directional motion blur (approximation of the export's dblur): the running
-   * average of 8 copies spread along the blur direction over `radius` px.
+   * average of copies spread along the blur direction over `radius` px, one
+   * every ~3 px (8–32 copies) so long streaks stay smooth instead of stepped.
    */
   private smear(layer: HTMLCanvasElement, W: number, H: number, angleDeg: number, radius: number): HTMLCanvasElement {
     const g = this.scratch(6, W, H);
-    const n = 8;
+    const n = Math.max(8, Math.min(32, Math.ceil(radius / 3)));
     const [dx, dy] = [Math.cos((angleDeg * Math.PI) / 180), Math.sin((angleDeg * Math.PI) / 180)];
     for (let i = 0; i < n; i++) {
       const o = (i / (n - 1) - 0.5) * radius;
@@ -293,27 +312,29 @@ export class LiveCompositor {
     return this.scratchCanvases[6]!;
   }
 
-  private lensMaps = new Map<string, Int32Array>();
+  private lensMaps = new Map<string, LensMap>();
+  private vignettes = new Map<string, HTMLCanvasElement>();
 
   /**
-   * Vignette, scanlines and lens distortion on a layer canvas, in the export's
-   * order (colour effects, then lens distortion last). Vignette is an
-   * approximation; scanlines and the lens mapping use the export's geometry.
+   * Vignette, scanlines, film grain and lens distortion on a layer canvas with the
+   * export's formulas: cos⁴ vignette and scanlines on the same grid (in stack order),
+   * then Gaussian grain of the same strength (a different random pattern), then the
+   * bilinear lens remap last, as in the export. Grain and lens run on the CPU canvas #5.
    */
-  private stylize(layer: HTMLCanvasElement, clip: Clip, W: number, H: number, k: number): HTMLCanvasElement {
+  private stylize(layer: HTMLCanvasElement, clip: Clip, W: number, H: number, k: number, frame: number): HTMLCanvasElement {
     const g = layer.getContext("2d")!;
+    let grain = 0;
     for (const e of clip.effects) {
       if (!e.enabled) continue;
       const p = e.params as Record<string, number | string>;
+      if (e.type === "grain") {
+        grain = Math.hypot(grain, grainSigma(Number(p.amount))); // independent noises add in quadrature
+        continue;
+      }
       g.save();
       g.globalCompositeOperation = "source-atop"; // only where the layer has pixels
       if (e.type === "vignette") {
-        const r = Math.hypot(W, H) / 2;
-        const grad = g.createRadialGradient(W / 2, H / 2, r * 0.35, W / 2, H / 2, r);
-        grad.addColorStop(0, "rgba(0,0,0,0)");
-        grad.addColorStop(1, `rgba(0,0,0,${Math.min(1, 0.25 + Number(p.amount) * 0.75)})`);
-        g.fillStyle = grad;
-        g.fillRect(0, 0, W, H);
+        g.drawImage(this.vignetteMask(W, H, Number(p.amount)), 0, 0, W, H);
       } else if (e.type === "scanlines" && Number(p.amount) > 0) {
         const sp = Math.max(2, Math.round(Number(p.spacing) * k));
         const t = Math.max(1, Math.floor(sp / 2));
@@ -323,33 +344,67 @@ export class LiveCompositor {
       g.restore();
     }
     const lens = clip.effects.find((e) => e.enabled && e.type === "lensDistortion" && Number(e.params.amount) !== 0);
-    if (!lens) return layer;
+    if (!lens && grain <= 0) return layer;
+    const out = this.scratch(5, W, H);
+    out.drawImage(layer, 0, 0);
+    const src = out.getImageData(0, 0, W, H);
+    if (grain > 0) addGrain(src.data, grain, frame);
+    if (!lens) {
+      out.putImageData(src, 0, 0);
+      return this.scratchCanvases[5]!;
+    }
     const amount = Number(lens.params.amount);
     const key = `${W}x${H}:${amount}`;
     let map = this.lensMaps.get(key);
     if (!map) {
-      map = new Int32Array(W * H);
-      const kk = lensCoefficients(amount);
-      for (let y = 0; y < H; y++)
-        for (let x = 0; x < W; x++) {
-          const [sx, sy] = lensSource(x + 0.5, y + 0.5, W, H, kk);
-          const ix = Math.floor(sx);
-          const iy = Math.floor(sy);
-          map[y * W + x] = ix >= 0 && iy >= 0 && ix < W && iy < H ? iy * W + ix : -1;
-        }
+      map = lensMap(W, H, amount);
       if (this.lensMaps.size > 8) this.lensMaps.clear();
       this.lensMaps.set(key, map);
     }
-    const out = this.scratch(5, W, H);
-    out.drawImage(layer, 0, 0);
-    const src = out.getImageData(0, 0, W, H);
     const dst = out.createImageData(W, H);
-    const s32 = new Uint32Array(src.data.buffer);
-    const d32 = new Uint32Array(dst.data.buffer);
-    const fill = lens.params.edges === "transparent" ? 0 : 0xff000000; // little-endian ABGR: opaque black
-    for (let i = 0; i < map.length; i++) d32[i] = map[i]! >= 0 ? s32[map[i]!]! : fill;
+    remapBilinear(src.data, dst.data, map, W, lens.params.edges === "transparent" ? 0 : 255);
     out.putImageData(dst, 0, 0);
     return this.scratchCanvases[5]!;
+  }
+
+  /**
+   * A picture drawn at its layer size (lw × lh canvas px, at most ~6 frames of pixels) with
+   * `filter`, then stylized in that space: the export applies vignette, scanlines, grain and
+   * lens distortion to the fit-scaled layer, including the overflow a "fill" fit hides.
+   */
+  private stylizedPicture(src: CanvasImageSource, [sx, sy, sw, sh]: number[], lw: number, lh: number, filter: string, clip: Clip, W: number, H: number, k: number, frame: number): HTMLCanvasElement {
+    const r = Math.min(1, Math.sqrt((6 * W * H) / Math.max(1, lw * lh)));
+    const w = Math.max(2, Math.round(lw * r));
+    const h = Math.max(2, Math.round(lh * r));
+    const g = this.scratch(7, w, h);
+    g.filter = filter;
+    g.drawImage(src, sx!, sy!, sw!, sh!, 0, 0, w, h);
+    g.filter = "none";
+    return this.stylize(this.scratchCanvases[7]!, clip, w, h, k * r, frame);
+  }
+
+  /**
+   * Black with alpha 1 − cos⁴ falloff: drawn source-atop over a W×H layer it multiplies the
+   * layer by the vignette factor. Made at ≤ 512 px with the layer's aspect (it is smooth) and
+   * stretched, so a layer whose size animates does not rebuild it every frame.
+   */
+  private vignetteMask(W: number, H: number, amount: number): HTMLCanvasElement {
+    const mw = Math.max(8, Math.round(W >= H ? 512 : (512 * W) / H));
+    const mh = Math.max(8, Math.round(H >= W ? 512 : (512 * H) / W));
+    const key = `${mw}x${mh}:${amount}`;
+    let c = this.vignettes.get(key);
+    if (!c) {
+      c = document.createElement("canvas");
+      [c.width, c.height] = [mw, mh];
+      const g = c.getContext("2d")!;
+      const img = g.createImageData(mw, mh);
+      for (let y = 0; y < mh; y++)
+        for (let x = 0; x < mw; x++) img.data[(y * mw + x) * 4 + 3] = Math.round(255 * (1 - vignetteFactor(x + 0.5, y + 0.5, mw, mh, amount)));
+      g.putImageData(img, 0, 0);
+      if (this.vignettes.size > 8) this.vignettes.clear();
+      this.vignettes.set(key, c);
+    }
+    return c;
   }
 
   /** Source region drawn at w×h with the chroma key applied per pixel (same formula as the export). */
@@ -440,7 +495,95 @@ export class LiveCompositor {
 }
 
 /** Effects the live preview draws in a post pass on the layer canvas (see `stylize`). */
-const STYLIZE_LIVE = new Set(["vignette", "scanlines", "lensDistortion"]);
+const STYLIZE_LIVE = new Set(["vignette", "scanlines", "grain", "lensDistortion"]);
+
+/**
+ * Lens remap table: for each output pixel the top-left source pixel (-1 outside the
+ * frame, as FFmpeg `lenscorrection` fills) and 8-bit bilinear weights to its right/lower
+ * neighbours. Positions use the export's pixel-index convention (see `lensSource`).
+ */
+interface LensMap {
+  idx: Int32Array;
+  fx: Uint8Array;
+  fy: Uint8Array;
+}
+
+function lensMap(W: number, H: number, amount: number): LensMap {
+  const kk = lensCoefficients(amount);
+  const idx = new Int32Array(W * H);
+  const fx = new Uint8Array(W * H);
+  const fy = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const i = y * W + x;
+      const [sx, sy] = lensSource(x, y, W, H, kk);
+      if (!(sx >= 0 && sy >= 0 && sx <= W - 1 && sy <= H - 1)) {
+        idx[i] = -1;
+        continue;
+      }
+      // Keep the 2×2 footprint inside the frame: the last column/row samples its own pixel at weight 1.
+      const x0 = Math.min(Math.floor(sx), W - 2);
+      const y0 = Math.min(Math.floor(sy), H - 2);
+      idx[i] = y0 * W + x0;
+      fx[i] = Math.round((sx - x0) * 255);
+      fy[i] = Math.round((sy - y0) * 255);
+    }
+  return { idx, fx, fy };
+}
+
+/** Bilinear lens remap of RGBA pixels; pixels outside the source get black with alpha `fillAlpha`. */
+function remapBilinear(src: Uint8ClampedArray, dst: Uint8ClampedArray, map: LensMap, W: number, fillAlpha: number) {
+  const { idx, fx, fy } = map;
+  for (let i = 0; i < idx.length; i++) {
+    const o = i * 4;
+    const j = idx[i]!;
+    if (j < 0) {
+      dst[o + 3] = fillAlpha;
+      continue;
+    }
+    const wx = fx[i]!;
+    const wy = fy[i]!;
+    const a = j * 4;
+    const b = a + 4;
+    const c = a + W * 4;
+    const d = c + 4;
+    for (let ch = 0; ch < 4; ch++) {
+      const top = src[a + ch]! * (255 - wx) + src[b + ch]! * wx;
+      const bottom = src[c + ch]! * (255 - wx) + src[d + ch]! * wx;
+      dst[o + ch] = (top * (255 - wy) + bottom * wy) / 65025;
+    }
+  }
+}
+
+/** Standard-normal samples ×32 (int8), one table for every frame; frames read it at different offsets. */
+const GRAIN_TABLE_BITS = 20;
+let grainTable: Int8Array | undefined;
+function grainNoise(): Int8Array {
+  if (grainTable) return grainTable;
+  const t = new Int8Array(1 << GRAIN_TABLE_BITS);
+  let seed = 0x9e3779b9;
+  const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) + 1) / 4294967297;
+  for (let i = 0; i < t.length; i += 2) {
+    // Box–Muller: two independent normals per pair of uniforms.
+    const r = Math.sqrt(-2 * Math.log(rnd()));
+    const a = 2 * Math.PI * rnd();
+    t[i] = Math.max(-127, Math.min(127, Math.round(32 * r * Math.cos(a))));
+    t[i + 1] = Math.max(-127, Math.min(127, Math.round(32 * r * Math.sin(a))));
+  }
+  return (grainTable = t);
+}
+
+/** Temporal film grain on RGBA pixels: independent Gaussian noise (std `sigma` levels) per channel, a new pattern each frame. */
+function addGrain(d: Uint8ClampedArray, sigma: number, frame: number) {
+  const noise = grainNoise();
+  const mask = noise.length - 1;
+  const scale = sigma / 32;
+  let n = Math.imul(frame + 1, 0x2545f491) >>> 0; // frame-dependent start, so the grain moves
+  for (let o = 0; o < d.length; o += 4) {
+    if (d[o + 3] === 0) continue;
+    for (let ch = 0; ch < 3; ch++) d[o + ch] = d[o + ch]! + noise[n++ & mask]! * scale;
+  }
+}
 
 /** Canvas equivalents of the export’s blend modes. */
 const COMPOSITE_OPS: Record<BlendMode, GlobalCompositeOperation> = {
@@ -491,6 +634,11 @@ function drawFrameOverlays(ctx: CanvasRenderingContext2D, clip: Clip, W: number,
     ctx.fillRect(0, H - bar, W, bar);
     ctx.restore();
   }
+}
+
+/** Red-left / blue-right offset (canvas px) of the clip's chromatic aberration effects. */
+function aberrationShift(clip: Clip, k: number): number {
+  return clip.effects.reduce((s, e) => s + (e.enabled && e.type === "chromaticAberration" ? Math.round(Number(e.params.pixels) * k) : 0), 0);
 }
 
 /** Total red/blue split of the clip's active glitch effects at a frame (fraction of width). */
