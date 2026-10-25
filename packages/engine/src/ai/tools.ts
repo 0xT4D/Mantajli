@@ -110,6 +110,11 @@ const label = (tool: string) => `AI: ${tool}`;
  * Put a sound effect on an SFX-role track (created when missing); effects overlap freely, so a
  * busy track hands it to another SFX track. Clip name = effect kind (sound design reads it back).
  */
+/** Length of a clip as placed (clip.add clamps media to its source's whole frames). */
+function placedFrames(tx: Transaction, clipId: string): number {
+  return tx.project.tracks.flatMap((t) => t.clips).find((c) => c.id === clipId)!.duration;
+}
+
 function placeSfx(tx: Transaction, o: { assetId: string; kind: string; start: number; frames: number; gainDb?: number; trackId?: string }): { trackId: string; clipId: string } {
   let trackId = o.trackId ?? tx.project.tracks.find((t) => t.kind === "audio" && t.role === "sfx")?.id;
   if (!trackId) trackId = tx.dispatch("track.add", { kind: "audio", name: "SFX", role: "sfx" }).trackId;
@@ -1210,9 +1215,10 @@ export const TOOLS: ToolDef[] = [
         let cursor = i.start;
         const out = [];
         for (const sp of spoken) {
-          const frames = Math.max(1, Math.round(sp.seconds * fps));
           const start = sp.seg.start ?? cursor;
-          const c = tx.dispatch("clip.add", { trackId: voiceTrack, clip: { type: "media", assetId: sp.asset.id, start, duration: frames, name: sp.seg.text.slice(0, 60) }, mode: "error" });
+          const c = tx.dispatch("clip.add", { trackId: voiceTrack, clip: { type: "media", assetId: sp.asset.id, start, duration: Math.max(1, Math.round(sp.seconds * fps)), name: sp.seg.text.slice(0, 60) }, mode: "error" });
+          // Captions follow the clip as placed (clamped to the audio's whole frames), not the rounded length.
+          const frames = placedFrames(tx, c.clipId);
           if (i.gainDb) tx.dispatch("clip.update", { clipId: c.clipId, props: { volumeDb: i.gainDb } });
           let captions = 0;
           if (i.captions) {
@@ -1261,6 +1267,7 @@ export const TOOLS: ToolDef[] = [
       const r = s.transaction(label("re-voice"), ctx.source, (tx) => {
         tx.dispatch("clip.remove", { clipIds: [old.id] });
         const c = tx.dispatch("clip.add", { trackId: found.track.id, clip: { type: "media", assetId: v.asset.id, start: old.start, duration: frames, name: i.text.slice(0, 60) }, mode: "error" });
+        const placed = placedFrames(tx, c.clipId);
         if (old.volumeDb) tx.dispatch("clip.update", { clipId: c.clipId, props: { volumeDb: old.volumeDb } });
         const cap = tx.project.tracks.find((t) => t.kind === "text" && t.name === "Captions");
         let captions = 0;
@@ -1268,7 +1275,7 @@ export const TOOLS: ToolDef[] = [
           const stale = cap.clips.filter((x) => x.start >= old.start && x.start < old.start + old.duration && x.name.startsWith("Caption:")).map((x) => x.id);
           if (stale.length) {
             tx.dispatch("clip.remove", { clipIds: stale });
-            for (const cue of captionCues(i.text, frames / fps)) {
+            for (const cue of captionCues(i.text, placed / fps)) {
               const a = old.start + Math.round(cue.start * fps);
               const b = old.start + Math.round(cue.end * fps);
               if (b <= a) continue;
@@ -1277,7 +1284,7 @@ export const TOOLS: ToolDef[] = [
             }
           }
         }
-        return { clipId: c.clipId, start: old.start, frames, previousFrames: old.duration, captions };
+        return { clipId: c.clipId, start: old.start, frames: placed, previousFrames: old.duration, captions };
       });
       return { data: { assetId: v.asset.id, provider: v.provider, ...r } };
     },

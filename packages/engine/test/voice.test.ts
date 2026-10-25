@@ -88,14 +88,17 @@ describe("voice-over workflow (local engine)", () => {
     for (const seg of data.segments) {
       const asset = s.project.assets.find((x) => x.id === seg.assetId)!;
       expect(asset.tags).toContain(`tts:${local.id}`);
-      expect(seg.frames).toBe(Math.round(asset.meta.duration! * 30));
+      const placed = s.project.tracks.flatMap((t) => t.clips).find((c) => c.id === seg.clipId)!;
+      expect(seg.frames).toBe(placed.duration); // reported length = the clip as placed (whole frames of the audio)
+      expect(Math.abs(seg.frames - asset.meta.duration! * 30)).toBeLessThanOrEqual(1);
       expect(asset.meta.duration!).toBeGreaterThan(0.8);
       expect(maxVolume(asset.path)).toBeGreaterThan(-20); // speech, not silence (its level is asserted as LUFS above; peaks vary by engine)
       // Captions cover the segment exactly.
       const caps = s.project.tracks.find((t) => t.id === data.captionTrackId)!.clips.filter((c) => c.start >= seg.start && c.start < seg.start + seg.frames);
       expect(caps.length).toBe(seg.captions);
       expect(caps[0]!.start).toBe(seg.start);
-      expect(Math.max(...caps.map((c) => c.start + c.duration))).toBeLessThanOrEqual(seg.start + seg.frames);
+      // Captions end with the voice clip, not a frame after it (they were timed from the rounded length).
+      expect(Math.max(...caps.map((c) => c.start + c.duration))).toBe(placed.start + placed.duration);
     }
 
     // Same text again: cached audio (no new asset).
