@@ -2,7 +2,7 @@ import { Loader2, PlugZap } from "lucide-react";
 import { AutoEditDialog } from "./components/AutoEdit";
 import { useEffect } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
-import { clipEnd, projectDuration } from "@mantagli/core";
+import { clipEnd, projectDuration, type Clip } from "@mantagli/core";
 import { AIPanel } from "./components/AIPanel";
 import { ExportDialog, NewProjectDialog, OpenProjectDialog, SettingsDialog, StatusBar, Toasts, TopBar, Welcome } from "./components/Chrome";
 import { Inspector } from "./components/Inspector";
@@ -118,6 +118,9 @@ function isTyping(t: EventTarget | null): boolean {
   return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable);
 }
 
+/** Clips copied with Ctrl+C / Ctrl+X (with their source tracks), pasted with Ctrl+V. */
+let clipboard: { trackId: string; clip: Clip }[] = [];
+
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -147,6 +150,16 @@ function useShortcuts() {
         else if (key === "e") st.setDialog("export");
         else if (key === "i") void importFlow();
         else if (key === "d" && sel.length) void st.transaction("Duplicate", sel.map((id) => ({ name: "clip.duplicate", params: { clipId: id } }))).catch(() => {});
+        else if ((key === "c" || key === "x") && sel.length) {
+          // Copy (or cut) the selected clips with their tracks; Ctrl+V pastes them at the playhead.
+          clipboard = p.tracks.flatMap((tr) => tr.clips.filter((c) => sel.includes(c.id)).map((clip) => ({ trackId: tr.id, clip })));
+          if (key === "x") void st.dispatch("clip.remove", { clipIds: sel }, "Cut").then(() => st.setSelection({ kind: "none" })).catch(() => {});
+          else st.toast("info", `Copied ${clipboard.length} clip${clipboard.length > 1 ? "s" : ""}`);
+        } else if (key === "v" && clipboard.length)
+          void st
+            .dispatch("clip.paste", { items: clipboard, at: st.playhead }, "Paste")
+            .then((r) => st.setSelection({ kind: "clips", ids: (r as { clipIds: string[] }).clipIds }))
+            .catch(() => {});
         else if (key === "a") st.setSelection({ kind: "clips", ids: allClips.map((c) => c.id) });
         else return;
         e.preventDefault();

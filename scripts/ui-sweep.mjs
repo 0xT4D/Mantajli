@@ -1,6 +1,6 @@
 // UI sweep: visit every workspace, dialog and inspector in headless Edge, collect console
 // errors, and save one screenshot per state. Needs the engine (with a project open) and Vite.
-// Usage: node scripts/ui-sweep.mjs <outDir>
+// Usage: node scripts/ui-sweep.mjs <outDir> [url]
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "playwright-core";
@@ -12,7 +12,7 @@ const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(`console: ${m.text()}`));
 page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
-await page.goto("http://127.0.0.1:1420/");
+await page.goto(process.argv[3] ?? "http://127.0.0.1:1420/");
 await page.waitForTimeout(3000);
 
 const results = [];
@@ -66,6 +66,21 @@ await state("play 1.5 s (live compositor)", async () => {
 await state("step frames + exact render", async () => {
   for (let i = 0; i < 10; i++) await page.keyboard.press("ArrowRight");
   await page.waitForTimeout(2500);
+});
+await state("timeline insert menu", async () => {
+  await page.locator("button[title^='Insert title']").first().click();
+  await page.locator("button:has-text('Adjustment layer')").first().waitFor({ timeout: 2000 });
+});
+await state("insert adjustment layer (inspector)", async () => {
+  await page.locator("button:has-text('Adjustment layer')").first().click();
+  await page.locator("text=/Adjustment ·/").first().waitFor({ timeout: 4000 });
+});
+await state("undo the insert", () => page.keyboard.press("Control+z"));
+await state("add track menu", async () => {
+  await page.locator("button[title='Add track']").first().click();
+  await page.locator("button:has-text('Audio track')").first().waitFor({ timeout: 2000 });
+  await page.keyboard.press("Escape");
+  await page.mouse.move(10, 10);
 });
 await state("export dialog (OTIO + captions sections)", () => page.locator("button:has-text('Export')").first().click());
 await state("close export", closeDialog);

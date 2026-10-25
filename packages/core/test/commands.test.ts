@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AssetSchema,
   History,
+  lookSpec,
   applyCommand,
   buildCompositionPlan,
   createProject,
@@ -228,5 +229,100 @@ describe("composition plan", () => {
     const s = summarizeProject(p);
     expect(s.project.durationFrames).toBe(150);
     expect(s.tracks.find((t) => t.name === "V1")!.clips[0]).toMatchObject({ assetId, start: 0, duration: 150 });
+  });
+});
+
+describe("camera moves and scene object edits", () => {
+  it("builds an orbit path with snap-and-settle progress keys and can remove it again", () => {
+    let p = createProject({ name: "Cam", format: "vertical" });
+    const sc = run(p, "scene.create", { name: "S", durationFrames: 90, template: "empty" });
+    p = sc.project;
+    const scene = () => p.scenes[0]!;
+    const camId = scene().objects.find((o) => o.kind === "camera")!.id;
+    const hero = run(p, "scene.addObject", { sceneId: sc.result.sceneId, object: { kind: "mesh", name: "Hero", location: [1, 2, 0.5] } });
+    p = hero.project;
+    p = run(p, "scene.cameraMove", { sceneId: sc.result.sceneId, cameraId: camId, move: "orbit", targetId: hero.result.objectId, distance: 5, height: 1, arc: 180, easing: "expoOut", stops: [30, 60], stepFrames: 12 }).project;
+    const cam = scene().objects.find((o) => o.id === camId)!;
+    expect(cam.camera!.trackTargetId).toBe(hero.result.objectId);
+    expect(cam.location).toEqual([0, 0, 0]);
+    // Points sit on the circle of radius 5 around the target, 1 m above it.
+    for (const [x, y, z] of cam.path!.points) {
+      expect(Math.hypot(x - 1, y - 2)).toBeCloseTo(5, 2);
+      expect(z).toBeCloseTo(1.5, 5);
+    }
+    expect(cam.animation.find((a) => a.property === "pathProgress")!.keyframes).toEqual([
+      { frame: 30, value: [0], easing: "expoOut" },
+      { frame: 42, value: [0.5], easing: "hold" },
+      { frame: 60, value: [0.5], easing: "expoOut" },
+      { frame: 72, value: [1], easing: "hold" },
+    ]);
+    // Moves that would run past the scene end are rejected.
+    expect(() => run(p, "scene.cameraMove", { sceneId: sc.result.sceneId, cameraId: camId, move: "dollyIn", stops: [85], stepFrames: 20 })).toThrow(/beyond the scene/);
+    // Unset removes optional settings that a patch cannot express.
+    p = run(p, "scene.updateObject", { sceneId: sc.result.sceneId, objectId: camId, unset: ["path", "camera.trackTargetId"] }).project;
+    const after = scene().objects.find((o) => o.id === camId)!;
+    expect(after.path).toBeUndefined();
+    expect(after.camera!.trackTargetId).toBeUndefined();
+    expect(after.animation.some((a) => a.property === "pathProgress")).toBe(false);
+  });
+
+  it("fills the frame with a portal screen like a fill-fit clip", async () => {
+    const { fillDistance } = await import("../src/index.js");
+    // 16:9 screen in a 9:16 frame at 32 mm: heights match (vertical FOV from the 36 mm sensor across the height).
+    const d = fillDistance(1.6, 0.9, 32, 9 / 16);
+    expect(0.9 / 2 / d).toBeCloseTo(18 / 32, 6);
+    // 4:3 screen in a 16:9 frame: widths match.
+    const d2 = fillDistance(1.2, 0.9, 32, 16 / 9);
+    expect(1.2 / 2 / d2).toBeCloseTo(18 / 32, 6);
+  });
+});
+
+describe("copy and paste", () => {
+  it("pastes clips at a frame keeping relative timing and tracks, with fresh ids", () => {
+    let { p, assetId } = withAsset(createProject({ name: "CP" }), "video", 20);
+    const a = run(p, "clip.add", { trackId: v1(p), clip: { type: "media", assetId, start: 0, duration: 30 } });
+    const t = a.project.tracks.find((x) => x.name === "Titles")!.id;
+    const b = run(a.project, "clip.add", { trackId: t, clip: { type: "text", text: "HI", start: 10, duration: 20 } });
+    p = b.project;
+    const items = p.tracks.flatMap((tr) => tr.clips.map((clip) => ({ trackId: tr.id, clip })));
+    const r = run(p, "clip.paste", { items, at: 100 });
+    const pasted = r.project.tracks.flatMap((tr) => tr.clips.filter((c) => r.result.clipIds.includes(c.id)).map((c) => ({ track: tr.name, start: c.start, id: c.id })));
+    expect(pasted.map(({ track, start }) => ({ track, start })).sort((x, y) => x.start - y.start)).toEqual([
+      { track: "V1", start: 100 },
+      { track: "Titles", start: 110 },
+    ]);
+    expect(pasted.every((x) => !items.some((i) => i.clip.id === x.id))).toBe(true);
+    // A deleted source track falls back to the first track of the same kind.
+    const gone = run(r.project, "track.remove", { trackId: t, force: true } as never).project;
+    const textItem = items.find((i) => i.clip.type === "text")!;
+    const withText = run(gone, "track.add", { kind: "text", name: "T2" }).project;
+    const r2 = run(withText, "clip.paste", { items: [textItem], at: 200 });
+    expect(r2.project.tracks.find((tr) => tr.clips.some((c) => c.id === r2.result.clipIds[0]))!.name).toBe("T2");
+    expect(() => run(gone, "clip.paste", { items: [textItem], at: 200 })).toThrow(/No track/);
+    // Media from another project is rejected.
+    const media = items.find((i) => i.clip.type === "media")!;
+    const other = { trackId: v1(p), clip: { ...media.clip, assetId: "ast_missing" } as typeof media.clip };
+    expect(() => run(p, "clip.paste", { items: [other], at: 0 })).toThrow(/not in this project/);
+  });
+});
+
+describe("saved looks", () => {
+  it("saves a clip's enabled effects as a reusable look, replaces by name and removes", () => {
+    let p = createProject({ name: "L" });
+    const c = run(p, "clip.add", { trackId: v1(p), clip: { type: "color", fill: "#808080", start: 0, duration: 30 } });
+    p = run(c.project, "effect.add", { clipId: c.result.clipId, type: "scanlines", params: { amount: 0.3 } }).project;
+    const off = run(p, "effect.add", { clipId: c.result.clipId, type: "grain", params: {} });
+    p = run(off.project, "effect.update", { clipId: c.result.clipId, effectId: off.result.effectId, enabled: false }).project;
+    const saved = run(p, "look.save", { clipId: c.result.clipId, label: "My CRT" });
+    p = saved.project;
+    expect(p.looks).toHaveLength(1);
+    expect(p.looks[0]!.effects.map((e) => e.type)).toEqual(["scanlines"]); // disabled grain left out
+    // Same name replaces; built-in names are reserved.
+    p = run(p, "look.save", { clipId: c.result.clipId, label: "my crt" }).project;
+    expect(p.looks).toHaveLength(1);
+    expect(() => run(p, "look.save", { clipId: c.result.clipId, label: "Noir" })).toThrow(/built-in/);
+    expect(lookSpec(saved.result.lookId, p.looks)?.label).toBe("my crt");
+    p = run(p, "look.remove", { lookId: saved.result.lookId }).project;
+    expect(p.looks).toHaveLength(0);
   });
 });

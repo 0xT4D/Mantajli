@@ -1,5 +1,5 @@
-import type { Clip, Easing, KeyframeProperty, TextClip } from "./schema.js";
-import { REVEAL_ANIMATIONS } from "./effects.js";
+import type { Clip, Easing, KeyframeProperty, TextClip, Transition } from "./schema.js";
+import { REVEAL_ANIMATIONS, ZOOM_THROUGH_SCALE } from "./effects.js";
 import { ease } from "./timeline.js";
 
 /**
@@ -51,6 +51,106 @@ export interface LayerCurveOptions {
   fps?: number;
   /** Timeline markers (absolute frames), used by beat-driven motion effects. */
   markers?: readonly { frame: number; kind: string }[];
+  /** The next clip's transition when it plays over this clip's tail (two-sided transitions animate it). */
+  transitionOut?: Transition | null;
+}
+
+/** Easing of whip pans: slow at both ends, very fast through the middle. */
+const WHIP_EASING: Easing = "expoInOut";
+/** Motion-blur shutter as a fraction of the frame interval (180° shutter). */
+const SHUTTER = 0.5;
+
+type WhipAxis = { axis: "x" | "y"; sign: 1 | -1 };
+/** Axis and direction the content moves in a whip pan (incoming enters from -sign·size). */
+function whipAxis(type: string): WhipAxis | null {
+  switch (type) {
+    case "whipLeft":
+      return { axis: "x", sign: -1 };
+    case "whipRight":
+      return { axis: "x", sign: 1 };
+    case "whipUp":
+      return { axis: "y", sign: -1 };
+    case "whipDown":
+      return { axis: "y", sign: 1 };
+  }
+  return null;
+}
+
+const MOVING_TRANSITIONS = new Set(["slideLeft", "slideRight", "slideUp", "slideDown", "whipLeft", "whipRight", "whipUp", "whipDown"]);
+
+/**
+ * Whether the layer must be cropped to its frame cell (W×H around its rest
+ * position): transitions that move a shot should move the picture as seen in
+ * the frame, not the overflow of a "fill"-fit source that is wider or taller
+ * than the frame. Only when nothing else moves, rotates or zooms the layer —
+ * a pan across a wide image or a shake keeps its overflow.
+ */
+export function cropsToFrameCell(clip: Clip, transitionOut?: Transition | null): boolean {
+  const moving = (clip.transitionIn && MOVING_TRANSITIONS.has(clip.transitionIn.type)) || (transitionOut && MOVING_TRANSITIONS.has(transitionOut.type));
+  if (!moving || clip.type === "text" || clip.type === "adjustment") return false;
+  const t = clip.transform;
+  if (t.x !== 0 || t.y !== 0 || t.rotation !== 0) return false;
+  if ((["x", "y", "scale", "rotation"] as const).some((k) => (clip.keyframes[k]?.length ?? 0) > 0)) return false;
+  return !clip.effects.some((e) => e.enabled && (e.type === "shake" || e.type === "beatPulse" || e.type === "glitch"));
+}
+
+/** Glitch-cut burst state at a transition-relative frame r (strongest around the cut). */
+function glitchCutAt(r: number, d: number, seed: number) {
+  const half = Math.ceil(d / 2);
+  const amount = Math.max(0.3, 1 - (Math.abs(r - half) / Math.max(1, half)) * 0.7);
+  return glitchAt({ amount, density: 0.8, seed }, r);
+}
+
+/**
+ * Per-frame transition effects that are not geometry curves: motion blur
+ * matched to the transition's own movement (directional for whips, gaussian
+ * for zooms, in output pixels) and the RGB split of glitch cuts (fraction of
+ * the width). Shared by the export and the live preview.
+ */
+export function transitionFx(clip: Clip, frame: number, opts: LayerCurveOptions): { blurAngle: number; blurRadius: number; zoomSigma: number; rgbShift: number } {
+  const res = { blurAngle: 0, blurRadius: 0, zoomSigma: 0, rgbShift: 0 };
+  const sides: { t: Transition; r: number; incoming: boolean }[] = [];
+  if (clip.transitionIn && frame < clip.transitionIn.duration) sides.push({ t: clip.transitionIn, r: frame, incoming: true });
+  if (opts.transitionOut && frame >= clip.duration) sides.push({ t: opts.transitionOut, r: frame - clip.duration, incoming: false });
+  for (const { t, r, incoming } of sides) {
+    const d = t.duration;
+    const whip = whipAxis(t.type);
+    if (whip) {
+      const size = whip.axis === "x" ? opts.width : opts.height;
+      const p = (u: number) => ease(t.easing ?? WHIP_EASING, Math.min(1, Math.max(0, u)));
+      res.blurRadius = Math.max(res.blurRadius, Math.abs(p((r + 0.5) / d) - p((r - 0.5) / d)) * size * SHUTTER * (t.intensity ?? 1));
+      res.blurAngle = whip.axis === "x" ? 0 : 90;
+    } else if (t.type === "zoomThrough") {
+      const c = zoomCurve(t, incoming, clip.duration);
+      if (!c) continue;
+      const f = incoming ? r : clip.duration + r;
+      const ds = Math.abs(evalCurve(c, f + 0.5) - evalCurve(c, f - 0.5));
+      res.zoomSigma = Math.max(res.zoomSigma, ds * (Math.hypot(opts.width, opts.height) / 2) * SHUTTER * 0.35);
+    } else if (t.type === "glitchCut") {
+      res.rgbShift += glitchCutAt(r, d, incoming ? 7 : 8).shift * 1.6 * (t.intensity ?? 1);
+    }
+  }
+  return res;
+}
+
+/**
+ * Scale curve of a zoom-through: outgoing punches in to the peak on its last
+ * frame, incoming lands from it. Intensity scales the peak; an easing override
+ * replaces the landing's expo-out (the punch-in mirrors it).
+ */
+function zoomCurve(t: Transition, incoming: boolean, clipDuration: number): Curve | null {
+  const d = t.duration;
+  const h = Math.ceil(d / 2);
+  const Z = 1 + (ZOOM_THROUGH_SCALE - 1) * (t.intensity ?? 1);
+  if (incoming) return h < d ? [K(0, Z, "hold"), K(h, Z, t.easing ?? "expoOut"), K(d, 1)] : null;
+  return h >= 2 ? [K(clipDuration, 1, mirrorEasing(t.easing) ?? "expoIn"), K(clipDuration + h - 1, Z)] : null;
+}
+
+/** The easing that accelerates where `e` decelerates (for the outgoing half of a symmetric move). */
+function mirrorEasing(e?: Easing): Easing | undefined {
+  if (!e) return undefined;
+  const m: Partial<Record<Easing, Easing>> = { easeOut: "easeIn", easeIn: "easeOut", expoOut: "expoIn", expoIn: "expoOut", backOut: "backIn", backIn: "backOut" };
+  return m[e] ?? e;
 }
 
 /** Deterministic value in [-1, 1] for (seed, index, channel). */
@@ -73,6 +173,14 @@ export function glitchAt(params: Record<string, unknown>, frame: number): { acti
   const active = amount > 0 && noise(seed, seg, 11) * 0.5 + 0.5 < Number(params.density ?? 0.3);
   if (!active) return { active, jitter: 0, shift: 0 };
   return { active, jitter: noise(seed, seg, 12) * amount * 0.04, shift: (0.3 + 0.7 * Math.abs(noise(seed, seg, 13))) * amount * 0.012 * Math.sign(noise(seed, seg, 14) || 1) };
+}
+
+/** Stepped x jitter of a glitch cut over clip frames [from, from + n); r counts from the transition start. */
+function jitterCurve(from: number, n: number, d: number, seed: number, W: number): Curve {
+  const pts: Curve = [K(0, 0, "hold")];
+  for (let r = 0; r < n; r += 2) pts.push(K(from + r, glitchCutAt(r, d, seed).jitter * W, "hold"));
+  pts.push(K(from + n, 0, "hold"));
+  return pts;
 }
 
 /** Curves added by motion effects (shake, beat pulse) and the jitter of glitch. */
@@ -145,7 +253,7 @@ export function layerCurves(clip: Clip, opts: LayerCurveOptions): LayerCurves {
     const d = t.duration;
     switch (t.type) {
       case "crossfade":
-        c.opacity.push([K(0, 0), K(d, 1)]);
+        c.opacity.push([K(0, 0, t.easing ?? "linear"), K(d, 1)]);
         break;
       case "dipBlack":
       case "flash":
@@ -153,22 +261,46 @@ export function layerCurves(clip: Clip, opts: LayerCurveOptions): LayerCurves {
         c.opacity.push([K(0, 0, "hold"), K(Math.ceil(d / 2), 1)]);
         break;
       case "slideLeft":
-        c.x.push([K(0, W, "easeOut"), K(d, 0)]);
+        c.x.push([K(0, W, t.easing ?? "easeOut"), K(d, 0)]);
         break;
       case "slideRight":
-        c.x.push([K(0, -W, "easeOut"), K(d, 0)]);
+        c.x.push([K(0, -W, t.easing ?? "easeOut"), K(d, 0)]);
         break;
       case "slideUp":
-        c.y.push([K(0, H, "easeOut"), K(d, 0)]);
+        c.y.push([K(0, H, t.easing ?? "easeOut"), K(d, 0)]);
         break;
       case "slideDown":
-        c.y.push([K(0, -H, "easeOut"), K(d, 0)]);
+        c.y.push([K(0, -H, t.easing ?? "easeOut"), K(d, 0)]);
         break;
       case "zoomIn":
         c.scale.push([K(0, 1.3, "easeOut"), K(d, 1)]);
         c.opacity.push([K(0, 0, "easeOut"), K(Math.max(1, Math.round(d * 0.6)), 1)]);
         break;
+      case "zoomThrough":
+      case "glitchCut": {
+        // Hard cut in the middle; the outgoing shot covers the first half.
+        c.opacity.push([K(0, 0, "hold"), K(Math.ceil(d / 2), 1)]);
+        const z = t.type === "zoomThrough" && zoomCurve(t, true, dur);
+        if (z) c.scale.push(z);
+        if (t.type === "glitchCut") c.x.push(jitterCurve(0, d, d, 7, W * (t.intensity ?? 1)));
+        break;
+      }
     }
+    const whip = whipAxis(t.type);
+    if (whip) (whip.axis === "x" ? c.x : c.y).push([K(0, -whip.sign * (whip.axis === "x" ? W : H), t.easing ?? WHIP_EASING), K(d, 0)]);
+  }
+
+  // Two-sided transitions also move the outgoing shot over its tail.
+  const out = opts.transitionOut;
+  if (out) {
+    const d = out.duration;
+    const whip = whipAxis(out.type);
+    if (whip) (whip.axis === "x" ? c.x : c.y).push([K(dur, 0, out.easing ?? WHIP_EASING), K(dur + d, whip.sign * (whip.axis === "x" ? W : H))]);
+    if (out.type === "zoomThrough") {
+      const z = zoomCurve(out, false, dur);
+      if (z) c.scale.push(z);
+    }
+    if (out.type === "glitchCut") c.x.push(jitterCurve(dur, Math.ceil(d / 2), d, 8, W * (out.intensity ?? 1)));
   }
 
   if (clip.type === "text") {
@@ -228,15 +360,69 @@ export function textReveal(clip: TextClip, frame: number): number {
   };
   const shown = (u: number[], k: number) => (k <= 0 ? 0 : u[Math.min(k, u.length) - 1]!);
   let n = total;
-  if (REVEAL_ANIMATIONS.has(clip.animation.in) && frame < ad) {
+  if (COUNT_REVEALS.has(clip.animation.in) && frame < ad) {
     const u = units(clip.animation.in);
     n = Math.min(n, shown(u, Math.floor((u.length * (frame + 1)) / ad)));
   }
-  if (REVEAL_ANIMATIONS.has(clip.animation.out) && frame >= dur - ad) {
+  if (COUNT_REVEALS.has(clip.animation.out) && frame >= dur - ad) {
     const u = units(clip.animation.out);
     n = Math.min(n, shown(u, u.length - Math.floor((u.length * (frame - (dur - ad) + 1)) / ad)));
   }
   return Math.max(0, n);
+}
+
+/** Reveals measured as a visible-character count (typewriter, words); scramble substitutes glyphs instead. */
+const COUNT_REVEALS: ReadonlySet<string> = new Set(["typewriter", "words"]);
+
+/** Glyphs a scrambling character cycles through (ASCII so every font has them). */
+export const SCRAMBLE_GLYPHS = "!<>-_\\/[]{}=+*^?#$%&01ABCDEFKXZ";
+
+/** Stable 32-bit seed for a clip id (scramble glyphs differ per clip, never per render). */
+function seedOf(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
+  return h;
+}
+
+/**
+ * Scramble/decode state of character `i` of `n` at progress u (0 = nothing
+ * shown, 1 = fully decoded): characters appear left to right over the first
+ * half as random glyphs, then resolve to the real text left to right.
+ */
+function scrambleChar(ch: string, i: number, n: number, u: number, seed: number, step: number): string {
+  if (u <= 0) return "";
+  if (/\s/.test(ch)) return ch;
+  const appear = (0.5 * i) / n;
+  const resolve = 0.3 + (0.7 * (i + 1)) / n;
+  if (u < appear) return "";
+  if (u >= resolve - 1e-9) return ch;
+  const r = (noise(seed, step * 131 + i, 21) * 0.5 + 0.5) * SCRAMBLE_GLYPHS.length;
+  return SCRAMBLE_GLYPHS[Math.min(SCRAMBLE_GLYPHS.length - 1, Math.floor(r))]!;
+}
+
+/**
+ * The text lines drawn at a clip-relative frame, after typewriter/word reveals
+ * and scramble (decode) animations. One function for the export and the live
+ * preview. Scramble glyphs change every 2 frames.
+ */
+export function textLinesAt(clip: TextClip, frame: number): string[] {
+  const lines = revealLines(clip.text, textReveal(clip, frame));
+  const a = clip.animation;
+  const dur = clip.duration;
+  const ad = Math.min(a.duration, Math.floor(dur / 2));
+  let u: number | null = null;
+  if (a.in === "scramble" && frame < ad) u = (frame + 1) / ad;
+  else if (a.out === "scramble" && frame >= dur - ad) u = (dur - 1 - frame) / ad;
+  if (u === null || ad <= 0) return lines;
+  const n = textCharCount(clip);
+  const seed = seedOf(clip.id);
+  const step = Math.floor(frame / 2);
+  let i = 0;
+  return lines.map((line) =>
+    Array.from(line)
+      .map((ch) => scrambleChar(ch, i++, n, u!, seed, step))
+      .join(""),
+  );
 }
 
 /** Split text into lines, each truncated so that `visible` characters show in total. */
@@ -258,7 +444,7 @@ export function transitionMask(clip: Clip, frame: number): { shape: MaskShape; p
   if (!t) return null;
   const shape: MaskShape | undefined = ({ wipeLeft: "left", wipeRight: "right", wipeUp: "up", wipeDown: "down", iris: "iris" } as const)[t.type as "iris"];
   if (!shape || frame >= t.duration) return null;
-  return { shape, progress: ease("easeInOut", Math.max(0, frame) / t.duration) };
+  return { shape, progress: ease(t.easing ?? "easeInOut", Math.max(0, frame) / t.duration) };
 }
 
 /** Feather of mask edges as a fraction of the layer's width (shared by preview and export). */

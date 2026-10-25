@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { stat } from "node:fs/promises";
+import { mkdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import {
   AssetSchema,
@@ -28,9 +28,12 @@ import { analyzeAudio, makeFilmstrip, makeProxy, makeThumbnail, toBeatAnalysis }
 import { kindFromExtension, probeMedia, SUPPORTED_EXTENSIONS } from "./media/probe.js";
 import { existingFrames, renderSceneFrames, sceneRenderKey, type SceneQuality } from "./render/blender.js";
 import { compose, verifyOutput, type OutputCheck } from "./render/compose.js";
+import { RENDERER_VERSION } from "./render/ffgraph.js";
 import { defaultFontFile, resolveFontFile } from "./render/fonts.js";
 import { ProjectSession } from "./session.js";
-import { exists, quickHash, safeName, sha1 } from "./util/fsx.js";
+import { exists, quickHash, safeName, sha1, writeFileAtomic } from "./util/fsx.js";
+import { encodeWav, synthesizeSfx, type SfxKind, type SfxOptions } from "./media/sfx.js";
+import { runFfmpeg } from "./media/ffmpeg.js";
 
 export const EXPORT_PRESET_SIZES: Record<string, { width: number; height: number; codec?: "prores" }> = {
   reel1080: { width: 1080, height: 1920 },
@@ -196,6 +199,54 @@ export class Engine extends EventEmitter {
     return result;
   }
 
+  /**
+   * Render every frame of a 3D scene and encode it to an H.264 file in the
+   * project folder (generated/scenes), imported as a video asset: a reusable
+   * render for screens inside other scenes (portals) or for fast editing. The
+   * file name carries the scene's render key, so an edited scene bakes anew.
+   */
+  async bakeScene(sceneId: string, opts: { quality?: SceneQuality; scale?: number; source?: ChangeSource } = {}): Promise<Asset> {
+    const s = this.requireSession();
+    const scene = findScene(s.project, sceneId) ?? fail("not_found", `Scene ${sceneId} not found`);
+    const quality = opts.quality ?? "final";
+    const scale = opts.scale ?? 1;
+    const { key } = this.sceneCacheDir(sceneId, quality, scale);
+    const out = path.join(s.dir, "generated", "scenes", `${safeName(scene.name)}-${key}.mp4`);
+    if (!(await exists(out))) {
+      const r = await this.renderScene(sceneId, { quality, scale });
+      const fps = `${s.project.settings.fps.num}/${s.project.settings.fps.den}`;
+      const tmp = out.replace(/\.mp4$/, ".partial.mp4");
+      await mkdir(path.dirname(out), { recursive: true });
+      await runFfmpeg(this.ffmpeg, [
+        "-framerate", fps, "-i", path.join(r.dir, "frame_%05d.png"),
+        "-vf", "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p",
+        "-c:v", "libx264", "-preset", "medium", "-crf", "14",
+        "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+        "-movflags", "+faststart", tmp,
+      ], { timeoutMs: 600_000 });
+      await rename(tmp, out);
+    }
+    const imp = await this.importMedia([out], opts.source ?? "user");
+    const id = imp.imported[0]?.id ?? imp.duplicates[0]?.assetId ?? fail("io_error", imp.errors[0]?.message ?? "Baked scene import failed");
+    return findAsset(s.project, id)!;
+  }
+
+  /**
+   * Synthesize a sound effect into the project folder (generated/sfx) and
+   * import it. Deterministic: the same parameters reuse the same file/asset.
+   */
+  async generateSfx(kind: SfxKind, opts: SfxOptions = {}, source: ChangeSource = "user"): Promise<Asset> {
+    const s = this.requireSession();
+    const file = path.join(s.dir, "generated", "sfx", `${kind}-${sha1(JSON.stringify({ kind, ...opts })).slice(0, 10)}.wav`);
+    if (!(await exists(file))) {
+      const { left, right } = synthesizeSfx(kind, opts);
+      await writeFileAtomic(file, encodeWav(left, right));
+    }
+    const r = await this.importMedia([file], source);
+    const id = r.imported[0]?.id ?? r.duplicates[0]?.assetId ?? fail("io_error", r.errors[0]?.message ?? "Sound effect import failed");
+    return findAsset(s.project, id)!;
+  }
+
   /** Generate missing thumbnails, waveforms, filmstrips and proxies as background jobs. */
   async ensureDerived(assetId: string): Promise<void> {
     const s = this.requireSession();
@@ -271,7 +322,7 @@ export class Engine extends EventEmitter {
    * on the timeline where the asset is used (first clip on a music track, or
    * frame 0 if unused).
    */
-  async analyzeBeats(assetId: string, opts: { applyMarkers?: boolean; source?: ChangeSource } = {}): Promise<{ analysis: BeatAnalysis; markers?: { beats: number; onsets: number } ; job: JobInfo }> {
+  async analyzeBeats(assetId: string, opts: { applyMarkers?: boolean; source?: ChangeSource } = {}): Promise<{ analysis: BeatAnalysis; markers?: { beats: number; onsets: number; sections: number }; job: JobInfo }> {
     const s = this.requireSession();
     const a = findAsset(s.project, assetId) ?? fail("not_found", `Asset ${assetId} not found`);
     if (!a.meta.hasAudio) fail("invalid_params", `${a.name} has no audio`);
@@ -281,13 +332,13 @@ export class Engine extends EventEmitter {
     });
     const analysis = (await promise) as BeatAnalysis;
     s.applySystem("asset.update", { assetId, patch: { analysis: { ...findAsset(s.project, assetId)!.analysis, beats: analysis } } });
-    let markers: { beats: number; onsets: number } | undefined;
+    let markers: { beats: number; onsets: number; sections: number } | undefined;
     if (opts.applyMarkers !== false) markers = this.applyBeatMarkers(assetId, opts.source ?? "user");
     return { analysis, markers, job: this.jobs.get(job.id)! };
   }
 
   /** Convert an asset's analysed beats to timeline beat markers. */
-  applyBeatMarkers(assetId: string, source: ChangeSource): { beats: number; onsets: number } {
+  applyBeatMarkers(assetId: string, source: ChangeSource): { beats: number; onsets: number; sections: number } {
     const s = this.requireSession();
     const p = s.project;
     const a = findAsset(p, assetId) ?? fail("not_found", `Asset ${assetId} not found`);
@@ -317,7 +368,12 @@ export class Engine extends EventEmitter {
       if (f !== undefined) beatMarkers.push({ frame: f, strength: beats.strengths[i], downbeat: down.has(t.toFixed(3)) });
     });
     const onsets = beats.onsets.map(map).filter((f): f is number => f !== undefined);
-    return s.dispatch("marker.setBeats", { beats: beatMarkers, onsets }, source, `Beat markers (${beats.bpm} BPM)`);
+    // Section starts (the first one is the start of the audio itself: skipped).
+    const sections = beats.sections.slice(1).flatMap((x) => {
+      const f = map(x.time);
+      return f === undefined ? [] : [{ frame: f, label: x.label, energy: x.energy }];
+    });
+    return s.dispatch("marker.setBeats", { beats: beatMarkers, onsets, sections }, source, `Beat markers (${beats.bpm} BPM)`);
   }
 
   // ------------------------------------------------------------ rendering helpers
@@ -577,7 +633,7 @@ export class Engine extends EventEmitter {
     });
     // Beat-driven motion effects read the timeline markers.
     const markers = plan.layers.some((l) => l.clip.effects.some((e) => e.enabled && e.type === "beatPulse")) ? p.markers.map((m) => [m.frame, m.kind]) : undefined;
-    return sha1(JSON.stringify({ plan: { ...plan, warnings: undefined }, assetSig, scenes, settings: p.settings, markers, ...extra })).slice(0, 20);
+    return sha1(JSON.stringify({ renderer: RENDERER_VERSION, plan: { ...plan, warnings: undefined }, assetSig, scenes, settings: p.settings, markers, ...extra })).slice(0, 20);
   }
 
   // ------------------------------------------------------------ export

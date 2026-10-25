@@ -74,6 +74,30 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] 20 s cinematic promo built in the app (scripts/promo), exported and verified
 - [~] Installer rebuilt with all features (build verified; clean-machine install still untested)
 
+## M12 Reference-driven cinematic toolkit (session 4; see REFERENCE_VIDEO_ANALYSIS.md)
+- [x] Reference analysis of the 3 teasers (frames, transitions, motion energy, audio structure) + docs/reference sheets
+- [x] Easings: expo in/out/in-out (snap and settle), back in/out (core, FFmpeg, Blender)
+- [x] Scramble/decode text animation
+- [x] Adjustment layers (segmented composite) + lens/CRT distortion + scanlines + CRT Monitor look
+- [x] Two-sided transitions: whip pans (motion-matched blur), zoom through, glitch cut
+- [x] Slides/whips crop fill-fit sources to the frame cell (was: overflow slid over the other shot)
+- [x] Frozen tail when the outgoing clip has no handles (was: black under the transition in stills/ranges)
+- [x] Render caches keyed by renderer version / Blender script hash
+- [x] 3D: media planes (image/video), camera paths + moves (orbit/dolly/crane/truck, snap stops), shake, scatter instancing, grid + smoke materials, two-tone text, spot cones
+- [x] 6 reference templates (arcadePortal, turntableStage, synthwaveHorizon, treasureHoard, stageReveal, metalTitle)
+- [x] Scene bake to a video asset (portals, reuse)
+- [x] Music structure (drops, breakdowns, builds, dropouts) -> section markers
+- [x] Procedural SFX (whoosh, riser, impact, hit, glitch, blip, downlifter) with anchored placement
+- [x] Timeline Insert menu (title / solid / adjustment / SFX); Add-track menu made visible (was clipped)
+- [x] Copy / cut / paste clips (Ctrl+C/X/V) via `clip.paste`
+- [x] Saved project looks (look.save/remove, Looks tab, look_save tool)
+- [x] UI for 3D: media/scatter/shake/spot/edges/pattern fields, camera move section, key easing
+- [x] Feature sweep fixed (the rendered-feature checks had been silently skipped) + new tool steps
+- [~] Benchmark montage "NEON QUEST" (scripts/benchmark): built, reviewed, fixes applied; export pending
+- [ ] Live preview parity: lens remap is nearest-neighbour, motion smear 8 samples, grain/CA export-only
+- [ ] Physics (coin bursts, shatter) — not in the scene protocol
+- [ ] Transition presets (saved transition + duration + easing) — looks cover effect stacks only
+
 ## M7 AI Director
 - [x] Shared tool layer (52 tools), MCP server (standalone + bridge to app)
 - [x] Director loop (streaming, approvals, cancel, revert/accept, previews as images)

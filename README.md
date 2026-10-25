@@ -34,7 +34,9 @@ The installer lands in `<cargo target>/release/bundle/nsis/`.
 2. **Import** media (button, Ctrl+I, or drop files on the window). Thumbnails, proxies and
    waveforms are generated in the background.
 3. Drag clips from the bin to the timeline. Trim edges, move across tracks, split with **S**,
-   delete with **Del** (Shift+Del ripples), duplicate with **Ctrl+D**, undo/redo **Ctrl+Z / Ctrl+Shift+Z**.
+   delete with **Del** (Shift+Del ripples), duplicate with **Ctrl+D**, copy / cut / paste at the
+   playhead with **Ctrl+C / Ctrl+X / Ctrl+V** (relative timing and tracks kept), undo/redo
+   **Ctrl+Z / Ctrl+Shift+Z**.
 4. Select a music clip's asset → **Beats** to detect tempo; beat markers appear on the ruler and
    clips snap to them.
 5. **3D Scenes** tab → pick a template (e.g. 3D Chrome Title) → drag the scene to a track.
@@ -45,6 +47,25 @@ The installer lands in `<cargo target>/release/bundle/nsis/`.
 7. Viewer: plays a live approximate preview; when paused it shows the exact rendered frame.
    **Render preview video** renders the whole timeline exactly at draft quality.
 8. **Export** → preset → exports, verifies with FFprobe and decodes a sample.
+
+### Cinematic toolkit (session 4)
+- **Insert menu** (layers icon on the timeline toolbar): title, colour solid, **adjustment layer**
+  (its effects finish everything below it — e.g. the *CRT Monitor* look: barrel/CRT lens
+  distortion, scanlines, fringing, grain, vignette), and **sound effects** synthesized on the spot
+  (riser ending at the playhead, whoosh peaking on it, impact, hit, glitch, UI blip, downlifter).
+- **Transitions** that move both shots: whip pans (motion blur derived from the motion), zoom
+  through, glitch cut — plus the earlier dissolves, dips, slides, wipes and iris.
+- **Text**: scramble/decode reveal, typewriter, word-by-word; **easings** include expo
+  (snap-and-settle) and back (overshoot).
+- **Music**: beat analysis also finds the song structure — drops, breakdowns, builds — as
+  labelled section markers on the ruler (suggestions only; nothing moves by itself).
+- **3D**: image/video screens inside scenes (portals), camera moves along smooth paths (orbit,
+  dolly, crane, truck; optional snap on downbeats), camera shake, instanced scatter (coin piles,
+  seat rows), neon-grid and smoke materials, two-tone extruded type, spot cones. Templates:
+  Arcade Portal, Turntable Stations, Synthwave Horizon, Treasure Hoard, Stage Reveal, Metal Title.
+  **Bake** a scene to a video asset to play it on a screen in another scene.
+- The reference teasers and what Mantagli learned from them: `REFERENCE_VIDEO_ANALYSIS.md`;
+  the benchmark montage built only with these tools: `scripts/benchmark/`.
 
 ## AI Director (in-app)
 Open the AI panel, add your Anthropic API key (stored in the Windows Credential Manager), write a
@@ -65,9 +86,12 @@ Start with `project_get_state` and `capabilities`.
 ```bash
 npm test             # unit: core model/commands, AI tools, director (scripted model), MCP stdio
 npm run test:e2e     # real FFmpeg + Blender: pipeline acceptance + agent montage over MCP
+npx tsx scripts/feature-sweep.ts            # every tool / effect / transition over the real protocol
+node scripts/ui-sweep.mjs out [url]         # every workspace, dialog, menu (engine + Vite running)
 ```
 
 ## Project folder
 `Name.mantagli/` contains `project.json` (versioned schema), `backups/`, `cache/` (thumbnails,
 proxies, waveforms, 3D frames, previews — safe to delete), `exports/`, `scenes/*.blend`,
-`oplog.jsonl`. Source media are referenced, never modified.
+`oplog.jsonl`, `generated/` (synthesized sound effects, baked scenes — imported as assets).
+Source media are referenced, never modified.

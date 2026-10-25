@@ -27,6 +27,8 @@ export interface VisualLayer {
   /** Transition into this clip, and whether an outgoing clip sits under it. */
   transitionIn: Transition | null;
   hasOutgoing: boolean;
+  /** Transition of the next clip on the track when it plays over this clip's tail. */
+  transitionOut: Transition | null;
 }
 
 export interface AudioSegment {
@@ -70,7 +72,8 @@ export interface PlanOptions {
 export function transitionTail(t: Transition): number {
   const spec = TRANSITIONS.find((s) => s.type === t.type);
   if (!spec) return 0;
-  if (t.type === "dipBlack" || t.type === "flash") return Math.ceil(t.duration / 2);
+  // Cut-in-the-middle transitions: the outgoing shot is only seen for the first half.
+  if (t.type === "dipBlack" || t.type === "flash" || t.type === "zoomThrough" || t.type === "glitchCut") return Math.ceil(t.duration / 2);
   return spec.needsOutgoing ? t.duration : 0;
 }
 
@@ -121,6 +124,7 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
             speed: speedAt(clip, clipOffset),
             transitionIn: clip.transitionIn,
             hasOutgoing: !!adjacentPrevious(track, clip),
+            transitionOut: tail > 0 ? next!.transitionIn : null,
           });
           if (clip.type === "scene") sceneIds.add(clip.sceneId);
         }
@@ -140,7 +144,7 @@ export function buildCompositionPlan(p: Project, opts: PlanOptions = {}): Compos
           const dFrom = Math.max(dip.start, rs);
           const dTo = Math.min(clipEnd(dip), re);
           if (dTo > dFrom)
-            layers.push({ clip: dip, trackId: track.id, start: dFrom, frames: dTo - dFrom, clipOffset: dFrom - dip.start, tail: 0, sourceStart: 0, speed: 1, transitionIn: null, hasOutgoing: false });
+            layers.push({ clip: dip, trackId: track.id, start: dFrom, frames: dTo - dFrom, clipOffset: dFrom - dip.start, tail: 0, sourceStart: 0, speed: 1, transitionIn: null, hasOutgoing: false, transitionOut: null });
         }
       }
 

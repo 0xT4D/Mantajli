@@ -1,10 +1,12 @@
 /**
- * Audio analysis: waveform peaks, tempo, beat tracking, downbeats and
- * transient onsets.
+ * Audio analysis: waveform peaks, tempo, beat tracking, downbeats, transient
+ * onsets and song structure (drops, breakdowns, builds).
  *
  * Onset envelope = log-magnitude spectral flux. Tempo = autocorrelation of the
  * envelope with a log-normal prior around 120 BPM. Beats = dynamic-programming
- * beat tracker (Ellis 2007). Results are estimates; markers stay editable.
+ * beat tracker (Ellis 2007). Sections = novelty of loudness, brightness and
+ * onset density (see detectSections). Results are estimates; markers stay
+ * editable.
  */
 
 export const ANALYSIS_SR = 11025;
@@ -19,6 +21,17 @@ export interface WaveformData {
   peaks: number[];
 }
 
+export const SECTION_LABELS = ["intro", "build", "drop", "breakdown", "change", "outro"] as const;
+export type SectionLabel = (typeof SECTION_LABELS)[number];
+
+export interface SectionInfo {
+  /** Section start, seconds. */
+  time: number;
+  label: SectionLabel;
+  /** Relative loudness of the section (0 = quietest, 1 = loudest). */
+  energy: number;
+}
+
 export interface BeatResult {
   bpm: number;
   beats: number[];
@@ -26,6 +39,17 @@ export interface BeatResult {
   downbeats: number[];
   onsets: number[];
   confidence: number;
+  sections: SectionInfo[];
+}
+
+/** Per-hop features for structure analysis (same hop as the onset envelope). */
+export interface StructureFeatures {
+  /** RMS of the analysis window. */
+  rms: number[];
+  /** Share of spectral magnitude above about 1.4 kHz (0-1). */
+  bright: number[];
+  /** Spectral flux (onset envelope). */
+  flux: number[];
 }
 
 /** Incremental waveform + onset-envelope builder fed with PCM chunks. */
@@ -43,6 +67,8 @@ export class AudioAccumulator {
   private re = new Float64Array(WIN);
   private im = new Float64Array(WIN);
   readonly envelope: number[] = [];
+  readonly rms: number[] = [];
+  readonly bright: number[] = [];
   samples = 0;
 
   constructor(private readonly withOnsets: boolean) {}
@@ -76,10 +102,21 @@ export class AudioAccumulator {
       this.re[i] = this.ring[(this.writePos + i) % WIN]! * this.window[i]!;
       this.im[i] = 0;
     }
+    let sq = 0;
+    for (let i = 0; i < WIN; i++) sq += this.ring[i]! * this.ring[i]!;
+    this.rms.push(Math.sqrt(sq / WIN));
     fft(this.re, this.im);
     const bins = WIN / 2;
     const mag = new Float32Array(bins);
-    for (let k = 0; k < bins; k++) mag[k] = Math.log1p(100 * Math.hypot(this.re[k]!, this.im[k]!));
+    let lin = 0;
+    let high = 0;
+    for (let k = 0; k < bins; k++) {
+      const m = Math.hypot(this.re[k]!, this.im[k]!);
+      mag[k] = Math.log1p(100 * m);
+      lin += m;
+      if (k >= bins / 4) high += m;
+    }
+    this.bright.push(lin > 1e-9 ? high / lin : 0);
     let flux = 0;
     if (this.prevMag) for (let k = 1; k < bins; k++) flux += Math.max(0, mag[k]! - this.prevMag[k]!);
     this.prevMag = mag;
@@ -93,10 +130,10 @@ export class AudioAccumulator {
   }
 }
 
-export function detectBeats(envelopeRaw: number[]): BeatResult {
+export function detectBeats(envelopeRaw: number[], features?: Omit<StructureFeatures, "flux">): BeatResult {
   const fr = ANALYSIS_SR / HOP; // envelope frames per second (~86)
   const n = envelopeRaw.length;
-  const empty: BeatResult = { bpm: 0, beats: [], strengths: [], downbeats: [], onsets: [], confidence: 0 };
+  const empty: BeatResult = { bpm: 0, beats: [], strengths: [], downbeats: [], onsets: [], confidence: 0, sections: [] };
   if (n < fr * 4) return empty;
 
   // Normalise: subtract local mean, half-wave rectify, unit std.
@@ -212,6 +249,7 @@ export function detectBeats(envelopeRaw: number[]): BeatResult {
   }
 
   const r3 = (x: number) => Math.round(x * 1000) / 1000;
+  const sections = features ? detectSections({ ...features, flux: envelopeRaw }, confidence > 0.15 ? beats : []) : [];
   return {
     bpm: Math.round(((60 * fr) / period) * 10) / 10,
     beats: beats.map(r3),
@@ -219,7 +257,189 @@ export function detectBeats(envelopeRaw: number[]): BeatResult {
     downbeats: downbeats.map(r3),
     onsets: onsets.map(r3),
     confidence: Math.round(confidence * 100) / 100,
+    sections: sections.map((x) => ({ ...x, time: r3(x.time), energy: Math.round(x.energy * 100) / 100 })),
   };
+}
+
+/** Structure analysis window, seconds. */
+const SEC_WIN = 0.5;
+/** Seconds compared on each side of a candidate boundary. */
+const SEC_SPAN = 3;
+/** Minimum section length, seconds. */
+const SEC_MIN = 4;
+
+/**
+ * Song sections from loudness, brightness and onset density. A boundary is a
+ * peak of novelty (how different the next SEC_SPAN seconds are from the
+ * previous ones), refined to the sharpest change nearby and snapped to the
+ * nearest beat (0.3 s). Labels come
+ * from the loudness change across the boundary and the level of the section:
+ * drop (big rise into a loud part), breakdown (big fall), build (a rising part
+ * that ends in a drop), intro/outro at the ends, change otherwise.
+ */
+export function detectSections(f: StructureFeatures, beats: number[] = []): SectionInfo[] {
+  const fr = ANALYSIS_SR / HOP;
+  const per = Math.max(1, Math.round(SEC_WIN * fr));
+  const nw = Math.floor(Math.min(f.rms.length, f.bright.length, f.flux.length) / per);
+  if (nw * SEC_WIN < SEC_MIN * 2) return nw > 0 ? [{ time: 0, label: "intro", energy: 1 }] : [];
+  const mean = (a: number[], i0: number, i1: number) => {
+    let s = 0;
+    for (let i = i0; i < i1; i++) s += a[i]!;
+    return s / Math.max(1, i1 - i0);
+  };
+  // Window features: loudness (dB), brightness, onset density.
+  const L: number[] = [];
+  const B: number[] = [];
+  const O: number[] = [];
+  // Loudness = power average (percussive parts read as loud as they sound).
+  const pow = f.rms.map((r) => r * r);
+  const dbOf = (h0: number, h1: number) => 10 * Math.log10(mean(pow, h0, h1) + 1e-10);
+  for (let w = 0; w < nw; w++) {
+    const a = w * per;
+    L.push(dbOf(a, a + per));
+    B.push(mean(f.bright, a, a + per));
+    O.push(mean(f.flux, a, a + per));
+  }
+  const z = (a: number[]) => {
+    const m = a.reduce((x, y) => x + y, 0) / a.length;
+    const sd = Math.sqrt(a.reduce((x, y) => x + (y - m) ** 2, 0) / a.length) || 1;
+    return a.map((x) => (x - m) / sd);
+  };
+  const [Lz, Bz, Oz] = [z(L), z(B), z(O)];
+  const K = Math.round(SEC_SPAN / SEC_WIN);
+  const nov = new Array<number>(nw).fill(0);
+  const dL = new Array<number>(nw).fill(0);
+  for (let w = 2; w < nw - 2; w++) {
+    const a0 = Math.max(0, w - K);
+    const a1 = Math.min(nw, w + K);
+    const d = (arr: number[]) => mean(arr, w, a1) - mean(arr, a0, w);
+    dL[w] = d(L);
+    nov[w] = Math.abs(d(Lz)) + 0.7 * Math.abs(d(Bz)) + 0.5 * Math.abs(d(Oz));
+  }
+  const minGap = Math.round(SEC_MIN / SEC_WIN);
+  // Robust threshold (median + scaled MAD over the interior), so a fade-in or
+  // the final fade does not hide every change in between.
+  const inner = nov.slice(minGap / 2, nw - minGap / 2).sort((a, b) => a - b);
+  const med = inner[Math.floor(inner.length / 2)] ?? 0;
+  const mad = [...inner.map((v) => Math.abs(v - med))].sort((a, b) => a - b)[Math.floor(inner.length / 2)] ?? 0;
+  const thr = med + 1.2 * 1.4826 * mad;
+  // Greedy: strongest novelty peaks first, at least SEC_MIN apart and away from the ends.
+  const cand = nov
+    .map((v, w) => ({ v, w }))
+    .filter(({ v, w }) => v > thr && v >= (nov[w - 1] ?? 0) && v >= (nov[w + 1] ?? 0) && w >= minGap / 2 && w <= nw - minGap / 2);
+  cand.sort((a, b) => b.v - a.v);
+  const bounds: number[] = [];
+  for (const c of cand) if (bounds.every((b) => Math.abs(b - c.w) >= minGap)) bounds.push(c.w);
+  // The wide novelty window finds the area of a change; place it on the sharpest
+  // 1-second change nearby (a riser's start is not the drop that follows it).
+  const sharp = (w: number) => {
+    const d = (arr: number[]) => mean(arr, w, Math.min(nw, w + 2)) - mean(arr, Math.max(0, w - 2), w);
+    return Math.abs(d(Lz)) + 0.7 * Math.abs(d(Bz));
+  };
+  for (let i = 0; i < bounds.length; i++) {
+    let best = bounds[i]!;
+    for (let w = Math.max(2, bounds[i]! - 4); w <= Math.min(nw - 2, bounds[i]! + 4); w++) if (sharp(w) > sharp(best)) best = w;
+    bounds[i] = best;
+  }
+  // Short dropouts (0.5–4 s, ≥ 8 dB under the music on BOTH sides) are too
+  // short for the novelty window but are the breath before a drop: keep both edges.
+  const ctxW = Math.round(4 / SEC_WIN);
+  const level60 = (a: number, b: number) => {
+    const xs = L.slice(Math.max(0, a), Math.min(nw, b)).sort((x, y) => x - y);
+    return xs.length ? xs[Math.floor(xs.length * 0.6)]! : -Infinity;
+  };
+  for (let w = 2; w < nw - 2; ) {
+    const before = level60(w - ctxW, w);
+    if (L[w]! > before - 8) {
+      w++;
+      continue;
+    }
+    let e = w;
+    while (e < nw && L[e]! <= before - 6) e++;
+    const after = level60(e, e + ctxW);
+    if (e - w <= Math.round(4 / SEC_WIN) && e < nw - 2 && mean(L, w, e) <= after - 8)
+      for (const b of [w, e]) if (bounds.every((x) => Math.abs(x - b) >= 2)) bounds.push(b);
+    w = e + 1;
+  }
+  bounds.sort((a, b) => a - b);
+  void dL;
+
+  // Section levels: loudness of the sustained part (60th percentile), robust to fades.
+  const edges = [0, ...bounds, nw];
+  const level = edges.slice(0, -1).map((a, i) => {
+    const xs = L.slice(a, edges[i + 1]).sort((x, y) => x - y);
+    return xs[Math.floor(xs.length * 0.6)] ?? -100;
+  });
+  const lo = Math.min(...level);
+  const hi = Math.max(...level);
+  const energy = level.map((l) => (hi - lo > 1e-6 ? (l - lo) / (hi - lo) : 1));
+  /** Loudness slope in dB per second over windows [a, b) (least squares). */
+  const slope = (a: number, b: number) => {
+    const n = b - a;
+    if (n < 3) return 0;
+    let sx = 0;
+    let sy = 0;
+    let sxy = 0;
+    let sxx = 0;
+    for (let i = a; i < b; i++) {
+      const x = (i - a) * SEC_WIN;
+      sx += x;
+      sy += L[i]!;
+      sxy += x * L[i]!;
+      sxx += x * x;
+    }
+    return (n * sxy - sx * sy) / Math.max(1e-9, n * sxx - sx * sx);
+  };
+  /**
+   * Time of the sharpest loudness step (hop resolution) within a window of
+   * boundary w. Half-second power spans: long enough to always hold a beat.
+   */
+  const stepTime = (w: number) => {
+    const span = Math.round(0.5 * fr);
+    let best = w * per;
+    let bestD = -1;
+    for (let h = Math.max(span, (w - 1) * per); h <= Math.min(pow.length - span, (w + 1) * per); h++) {
+      const d = Math.abs(dbOf(h, h + span) - dbOf(h - span, h));
+      if (d > bestD) [best, bestD] = [h, d];
+    }
+    // Hop h analyses the WIN samples ending at HOP·h + WIN, so the change enters it there.
+    return (best * HOP + WIN) / ANALYSIS_SR;
+  };
+  /** A riser just before window w: brightness or loudness climbing over the last 4 s. */
+  const riser = (w: number) => {
+    const a = Math.max(0, w - 8);
+    const m = Math.max(a + 1, w - 4);
+    return mean(Bz, m, w) - mean(Bz, a, m) > 0.6 || slope(a, w) > 1.5;
+  };
+  const out: SectionInfo[] = [];
+  for (let i = 0; i < edges.length - 1; i++) {
+    const a = edges[i]!;
+    const last = i === edges.length - 2;
+    const jump = i > 0 ? level[i]! - level[i - 1]! : 0;
+    let label: SectionLabel;
+    if (i === 0) label = "intro";
+    else if (jump >= 4 && energy[i]! >= 0.6) label = "drop";
+    else if (jump <= -4) label = last ? "outro" : "breakdown";
+    else if (last && slope(a, edges[i + 1]!) < -1.5) label = "outro";
+    // The hit after a riser is the drop even when the master is loudness-flat.
+    else if (riser(a)) label = "drop";
+    else label = "change";
+    out.push({ time: i === 0 ? 0 : stepTime(a), label, energy: energy[i]! });
+  }
+  // A part that rises into a drop is a build (risers, filter sweeps).
+  for (let i = 1; i < out.length - 1; i++) if (out[i + 1]!.label === "drop" && out[i]!.label === "change" && slope(edges[i]!, edges[i + 1]!) > 0.6) out[i]!.label = "build";
+  // Snap boundaries to the nearest beat.
+  for (const sct of out.slice(1)) {
+    let best = sct.time;
+    let dist = 0.3;
+    for (const d of beats)
+      if (Math.abs(d - sct.time) < dist) {
+        best = d;
+        dist = Math.abs(d - sct.time);
+      }
+    sct.time = best;
+  }
+  return out;
 }
 
 function hann(n: number): Float64Array {

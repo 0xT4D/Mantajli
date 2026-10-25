@@ -41,6 +41,8 @@ export const BeatAnalysisSchema = z.object({
   downbeats: z.array(z.number().nonnegative()).default([]),
   /** Strong transient (onset) times in seconds. */
   onsets: z.array(z.number().nonnegative()).default([]),
+  /** Song structure: section starts (seconds) labelled intro/build/drop/breakdown/change/outro, with relative energy 0-1. */
+  sections: z.array(z.object({ time: z.number().nonnegative(), label: z.string(), energy: z.number().min(0).max(1) })).default([]),
   confidence: z.number().min(0).max(1),
   analyzedAt: z.string(),
 });
@@ -79,7 +81,11 @@ export type Asset = z.infer<typeof AssetSchema>;
 
 // ---------------------------------------------------------------- clips
 
-export const EASINGS = ["linear", "easeIn", "easeOut", "easeInOut", "hold"] as const;
+/**
+ * Segment easings. expo* are the "snap and settle" curves (fast start, long
+ * exponential settle); back* overshoot slightly before settling.
+ */
+export const EASINGS = ["linear", "easeIn", "easeOut", "easeInOut", "hold", "expoIn", "expoOut", "expoInOut", "backIn", "backOut"] as const;
 export type Easing = (typeof EASINGS)[number];
 
 export const KEYFRAME_PROPERTIES = ["opacity", "x", "y", "scale", "rotation", "volume", "speed"] as const;
@@ -123,6 +129,10 @@ export type Effect = z.infer<typeof EffectSchema>;
 export const TransitionSchema = z.object({
   type: z.enum(TRANSITION_TYPES as [string, ...string[]]),
   duration: z.number().int().min(1).max(600),
+  /** Override of the transition's own easing (progress curve). */
+  easing: z.enum(EASINGS).optional(),
+  /** Strength of motion blur, zoom and glitch (1 = default). */
+  intensity: z.number().min(0).max(2).optional(),
 });
 export type Transition = z.infer<typeof TransitionSchema>;
 
@@ -216,7 +226,18 @@ export const ColorClipSchema = z.object({
 });
 export type ColorClip = z.infer<typeof ColorClipSchema>;
 
-export const ClipSchema = z.discriminatedUnion("type", [MediaClipSchema, TextClipSchema, SceneClipSchema, ColorClipSchema]);
+/**
+ * Adjustment layer: no content of its own. Its effects, opacity, masks, blend
+ * mode and motion apply to everything composited below it while it is on the
+ * timeline (a whole-frame grade, lens/CRT finish, or camera shake).
+ */
+export const AdjustmentClipSchema = z.object({
+  ...ClipBase,
+  type: z.literal("adjustment"),
+});
+export type AdjustmentClip = z.infer<typeof AdjustmentClipSchema>;
+
+export const ClipSchema = z.discriminatedUnion("type", [MediaClipSchema, TextClipSchema, SceneClipSchema, ColorClipSchema, AdjustmentClipSchema]);
 export type Clip = z.infer<typeof ClipSchema>;
 export type ClipType = Clip["type"];
 
@@ -268,10 +289,21 @@ export const MaterialSchema = z.object({
   emissionColor: HexColor.default("#000000"),
   emissionStrength: z.number().min(0).max(100).default(0),
   transmission: z.number().min(0).max(1).default(0),
+  /**
+   * Procedural pattern. "grid" draws glowing lines (emission colour/strength)
+   * on the base colour every `patternScale` metres (synthwave floors, stages);
+   * "smoke" makes the emission billow like smoke/clouds (features about
+   * `patternScale` metres across) — smoky backdrops.
+   */
+  pattern: z.enum(["none", "grid", "smoke"]).default("none"),
+  patternScale: z.number().min(0.01).max(100).default(1),
+  /** Line width as a fraction of a cell. */
+  patternLineWidth: z.number().min(0.001).max(0.5).default(0.04),
 });
 export type Material = z.infer<typeof MaterialSchema>;
 
-export const SCENE_ANIM_PROPERTIES = ["location", "rotation", "scale", "focalLength", "energy", "focusDistance"] as const;
+/** pathProgress (0 = first point, 1 = last) moves an object along its `path`. */
+export const SCENE_ANIM_PROPERTIES = ["location", "rotation", "scale", "focalLength", "energy", "focusDistance", "pathProgress"] as const;
 export type SceneAnimProperty = (typeof SCENE_ANIM_PROPERTIES)[number];
 
 export const SceneKeyframeSchema = z.object({
@@ -287,12 +319,14 @@ export const SceneAnimTrackSchema = z.object({
   keyframes: z.array(SceneKeyframeSchema),
 });
 
-export const MESH_PRIMITIVES = ["cube", "sphere", "plane", "cylinder", "cone", "torus", "monkey", "roundedCube"] as const;
+export const MESH_PRIMITIVES = ["cube", "sphere", "plane", "cylinder", "cone", "torus", "monkey", "roundedCube", "coin", "crystal", "icosphere"] as const;
+
+export const SCATTER_DISTRIBUTIONS = ["box", "pile", "disc", "ring", "grid"] as const;
 
 export const SceneObjectSchema = z.object({
   id: IdSchema,
   name: z.string(),
-  kind: z.enum(["mesh", "text", "camera", "light", "model", "particles"]),
+  kind: z.enum(["mesh", "text", "camera", "light", "model", "particles", "media", "scatter"]),
   visible: z.boolean().default(true),
   location: Vec3.default([0, 0, 0]),
   /** Euler XYZ in degrees. */
@@ -309,6 +343,8 @@ export const SceneObjectSchema = z.object({
       bevel: z.number().min(0).max(1).default(0.02),
       align: z.enum(["left", "center", "right"]).default("center"),
       letterSpacing: z.number().min(0).max(5).default(1),
+      /** Material of the extruded sides and bevel (two-tone type: e.g. silver face, gold edges). */
+      sideMaterial: z.lazy(() => MaterialSchema).optional(),
     })
     .optional(),
   camera: z
@@ -319,6 +355,10 @@ export const SceneObjectSchema = z.object({
       fStop: z.number().min(0.5).max(64).default(2.8),
       /** Keep the camera pointed at this object. */
       trackTargetId: z.string().optional(),
+      /** Handheld shake: angular amplitude in degrees (0 = locked off). */
+      shake: z.number().min(0).max(10).default(0),
+      /** Shake speed in Hz. */
+      shakeHz: z.number().min(0.1).max(20).default(1.2),
     })
     .optional(),
   light: z
@@ -328,9 +368,59 @@ export const SceneObjectSchema = z.object({
       /** Watts for point/area/spot, irradiance for sun. */
       energy: z.number().min(0).max(1e6).default(500),
       size: z.number().min(0).default(1),
+      /** Spot cone angle (degrees) and edge softness (0–1). */
+      spotSize: z.number().min(1).max(180).default(45),
+      spotBlend: z.number().min(0).max(1).default(0.15),
     })
     .optional(),
   model: z.object({ assetId: IdSchema }).optional(),
+  /**
+   * Image or video on a plane (screens, logos, portals). Width in metres; the
+   * height follows the media's aspect. emission > 0 makes it a glowing screen
+   * (unlit), 0 lights it like a print. Video advances one frame per scene frame
+   * starting at sourceIn seconds.
+   */
+  media: z
+    .object({
+      assetId: IdSchema,
+      width: z.number().positive().max(1000).default(2),
+      emission: z.number().min(0).max(50).default(1),
+      sourceIn: z.number().min(0).default(0),
+      loop: z.boolean().default(true),
+    })
+    .optional(),
+  /**
+   * Instances of a primitive (or a model) scattered with a seeded random layout:
+   * coin piles, crystal clusters, rows of seats, floating debris.
+   */
+  scatter: z
+    .object({
+      primitive: z.enum(MESH_PRIMITIVES).default("coin"),
+      modelAssetId: IdSchema.optional(),
+      count: z.number().int().min(1).max(20000).default(300),
+      distribution: z.enum(SCATTER_DISTRIBUTIONS).default("pile"),
+      /** Half-extents (box/grid), radius in x (disc/ring/pile) and height in z (pile). */
+      area: Vec3.default([2, 2, 1]),
+      size: z.number().positive().max(100).default(0.2),
+      sizeJitter: z.number().min(0).max(1).default(0.25),
+      /** Random rotation amount (0 = aligned, 1 = fully random). */
+      rotationJitter: z.number().min(0).max(1).default(1),
+      seed: z.number().int().default(1),
+    })
+    .optional(),
+  /**
+   * Smooth spline through `points` (scene coordinates). Animate pathProgress
+   * (0..1) to move along it; the object's own location is added as an offset.
+   * Cameras keep looking at their target (or their own rotation) unless
+   * followTangent turns them along the path.
+   */
+  path: z
+    .object({
+      points: z.array(Vec3).min(2).max(64),
+      closed: z.boolean().default(false),
+      followTangent: z.boolean().default(false),
+    })
+    .optional(),
   particles: z
     .object({
       count: z.number().int().min(1).max(5000).default(400),
@@ -459,6 +549,15 @@ export const AiPlanSchema = z.object({
 });
 export type AiPlan = z.infer<typeof AiPlanSchema>;
 
+/** A look saved by the user: a named, reusable effect stack (alongside the built-in LOOKS). */
+export const UserLookSchema = z.object({
+  id: IdSchema,
+  label: z.string().min(1).max(80),
+  description: z.string().max(300).default(""),
+  effects: z.array(z.object({ type: z.enum(EFFECT_TYPES as [string, ...string[]]), params: z.record(z.string(), z.union([z.number(), z.string(), z.boolean()])) })).max(32),
+});
+export type UserLook = z.infer<typeof UserLookSchema>;
+
 export const OpLogEntrySchema = z.object({
   at: z.string(),
   source: z.enum(["user", "ai", "mcp", "system"]),
@@ -479,6 +578,8 @@ export const ProjectSchema = z.object({
   scenes: z.array(SceneSchema).default([]),
   export: ExportSettingsSchema.default(ExportSettingsSchema.parse({})),
   mix: MixSettingsSchema.default(MixSettingsSchema.parse({})),
+  /** Looks saved in this project (effect stacks the user made reusable). */
+  looks: z.array(UserLookSchema).default([]),
   ai: z
     .object({
       plans: z.array(AiPlanSchema).default([]),

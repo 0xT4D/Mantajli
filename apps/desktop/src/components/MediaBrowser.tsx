@@ -5,7 +5,7 @@ import { engine } from "../engine/client";
 import { isTauri, MEDIA_FILTERS, pickFiles } from "../lib/platform";
 import { projectFile, useStudio } from "../store/studio";
 import { binDragHandlers } from "../lib/binDrag";
-import { Button, ColorField, cx, Empty, IconButton, NumberField, Progress, Row, Select, TextField } from "./ui";
+import { Button, ColorField, cx, Empty, IconButton, NumberField, Progress, Row, Select, TextField, Toggle } from "./ui";
 
 const KIND_ICON: Record<AssetKind, React.ReactNode> = {
   video: <Film size={13} />,
@@ -254,17 +254,31 @@ function ScenesTab() {
   const [accentB, setB] = useState("#00e5ff");
   const models = project.assets.filter((a) => a.kind === "model");
   const [model, setModel] = useState<string>("");
+  const screens = project.assets.filter((a) => (a.kind === "image" || a.kind === "video") && a.status === "ok");
+  const [screen, setScreen] = useState<string>("");
+  const [stations, setStations] = useState(4);
+  const [onBeats, setOnBeats] = useState(false);
+  const playhead = useStudio((s) => s.playhead);
+  const usesText = template === "chromeTitle" || template === "metalTitle";
+  const usesModel = template === "productTurntable" || template === "turntableStage";
+  const usesScreen = template === "arcadePortal" || template === "stageReveal";
+  const downbeats = project.markers.filter((m) => m.kind === "downbeat").map((m) => m.frame - playhead);
   const create = async () => {
+    const durationFrames = Math.max(1, Math.round(seconds * fps));
+    // Snap on the downbeats that fall inside the scene when it is placed at the playhead.
+    const stops = downbeats.filter((f) => f > 0 && f < durationFrames - 6);
     const r = (await dispatch(
       "scene.create",
       {
         name,
         template,
-        durationFrames: Math.max(1, Math.round(seconds * fps)),
+        durationFrames,
         text,
         accentA,
         accentB,
-        ...(template === "productTurntable" && model ? { modelAssetId: model } : {}),
+        ...(usesModel && model ? { modelAssetId: model } : {}),
+        ...(usesScreen && screen ? { mediaAssetId: screen } : {}),
+        ...(template === "turntableStage" ? { count: stations, ...(onBeats && stops.length ? { stops } : {}) } : {}),
       },
       `New 3D scene ${name}`,
     ).catch(() => null)) as { sceneId: string } | null;
@@ -303,15 +317,30 @@ function ScenesTab() {
         <Row label="Name">
           <TextField value={name} onCommit={setName} />
         </Row>
-        {template === "chromeTitle" && (
+        {usesText && (
           <Row label="Title text">
             <TextField value={text} onCommit={setText} />
           </Row>
         )}
-        {template === "productTurntable" && (
+        {usesModel && (
           <Row label="Model">
-            <Select value={model} onChange={setModel} options={[{ value: "", label: "Rounded cube (no model)" }, ...models.map((m) => ({ value: m.id, label: m.name }))]} />
+            <Select value={model} onChange={setModel} options={[{ value: "", label: template === "turntableStage" ? "Primitives (no model)" : "Rounded cube (no model)" }, ...models.map((m) => ({ value: m.id, label: m.name }))]} />
           </Row>
+        )}
+        {usesScreen && (
+          <Row label="Screen" title="Image or video shown on the screen. Butt the clip itself against the scene for a portal cut.">
+            <Select value={screen} onChange={setScreen} options={[{ value: "", label: "Glow (no media)" }, ...screens.map((m) => ({ value: m.id, label: m.name }))]} />
+          </Row>
+        )}
+        {template === "turntableStage" && (
+          <>
+            <Row label="Stations">
+              <NumberField value={stations} onChange={setStations} min={2} max={8} step={1} />
+            </Row>
+            <Row label="Snap on beats" title="Start each move on a downbeat marker, counting from the playhead (where you will place the scene)">
+              <Toggle checked={onBeats} onChange={setOnBeats} label={downbeats.length ? "downbeats" : "no downbeat markers"} />
+            </Row>
+          </>
         )}
         <Row label="Duration">
           <NumberField value={seconds} onChange={setSeconds} min={0.2} max={600} step={0.1} unit="s" />
@@ -329,11 +358,17 @@ function ScenesTab() {
 }
 
 function LooksTab() {
-  const { selection, transaction, toast } = useStudio();
+  const { selection, transaction, toast, dispatch } = useStudio();
   const project = useStudio((s) => s.session.project)!;
   const clipIds = selection.kind === "clips" ? selection.ids : [];
+  const [lookName, setLookName] = useState("");
+  const selectedClip = clipIds.length === 1 ? project.tracks.flatMap((t) => t.clips).find((c) => c.id === clipIds[0]) : undefined;
+  const saveLook = () => {
+    if (!selectedClip || !lookName.trim()) return;
+    void dispatch("look.save", { clipId: selectedClip.id, label: lookName.trim() }, `Save look ${lookName.trim()}`).then(() => setLookName("")).catch(() => {});
+  };
   const apply = async (lookId: string) => {
-    const look = LOOKS.find((l) => l.id === lookId)!;
+    const look = [...LOOKS, ...project.looks].find((l) => l.id === lookId)!;
     const visual = clipIds.filter((id) => project.tracks.some((t) => t.kind !== "audio" && t.clips.some((c) => c.id === id)));
     if (!visual.length) return toast("info", "Select one or more visual clips on the timeline first");
     const cmds = visual.flatMap((clipId) => {
@@ -348,6 +383,17 @@ function LooksTab() {
   return (
     <div className="h-full overflow-auto p-2">
       <div className="mb-2 text-[10px] text-mute">{clipIds.length ? `Applies to ${clipIds.length} selected clip(s), replacing their effects.` : "Select clips on the timeline, then pick a look."}</div>
+      {project.looks.length > 0 && <div className="mt-1 mb-1 text-[10px] font-semibold uppercase tracking-wide text-dim">Saved in this project</div>}
+      {project.looks.map((l) => (
+        <div key={l.id} className="mb-1 flex items-stretch gap-1">
+          <button type="button" onClick={() => void apply(l.id)} className="block min-w-0 flex-1 rounded border border-accent/40 bg-panel-2 px-2 py-1.5 text-left hover:border-accent">
+            <div className="text-[11px] font-medium">{l.label}</div>
+            <div className="mt-0.5 truncate text-[9px] text-dim">{l.effects.map((e) => e.type).join(" · ")}</div>
+          </button>
+          <IconButton size={22} icon={<Trash2 size={11} />} label="Delete saved look" onClick={() => void dispatch("look.remove", { lookId: l.id }, "Delete look").catch(() => {})} />
+        </div>
+      ))}
+      {project.looks.length > 0 && <div className="mt-2 mb-1 text-[10px] font-semibold uppercase tracking-wide text-dim">Built in</div>}
       {LOOKS.map((l) => (
         <button key={l.id} type="button" onClick={() => void apply(l.id)} className="mb-1 block w-full rounded border border-line bg-panel-2 px-2 py-1.5 text-left hover:border-accent">
           <div className="text-[11px] font-medium">{l.label}</div>
@@ -355,6 +401,15 @@ function LooksTab() {
           <div className="mt-0.5 text-[9px] text-dim">{l.effects.map((e) => e.type).join(" · ")}</div>
         </button>
       ))}
+      <div className="mt-2 border-t border-line pt-2">
+        <div className="mb-1 text-[10px] text-mute">{selectedClip?.effects.length ? `Save the effects of "${selectedClip.name}" as a look` : "Select one clip with effects to save them as a look"}</div>
+        <div className="flex gap-1">
+          <TextField value={lookName} placeholder="Look name" onCommit={setLookName} />
+          <Button onClick={saveLook} disabled={!selectedClip?.effects.length}>
+            <Plus size={12} /> Save
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

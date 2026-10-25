@@ -142,8 +142,24 @@ export function ease(easing: Keyframe["easing"], u: number): number {
       return u * u * (3 - 2 * u);
     case "hold":
       return 0;
+    case "expoIn":
+      return (Math.pow(2, 10 * u) - 1) / 1023;
+    case "expoOut":
+      return (1 - Math.pow(2, -10 * u)) * (1024 / 1023);
+    case "expoInOut":
+      return u < 0.5 ? ease("expoIn", 2 * u) / 2 : 0.5 + ease("expoOut", 2 * u - 1) / 2;
+    case "backIn":
+      return BACK_S1 * u * u * u - BACK_S * u * u;
+    case "backOut": {
+      const v = u - 1;
+      return 1 + BACK_S1 * v * v * v + BACK_S * v * v;
+    }
   }
 }
+
+/** Overshoot of the back easings (Penner's 10 %; Blender's default `back`). */
+export const BACK_S = 1.70158;
+const BACK_S1 = BACK_S + 1;
 
 /** Evaluate a keyframed property at a clip-relative frame. */
 export function evalKeyframes(kfs: Keyframe[] | undefined, frame: number, fallback: number): number {

@@ -6,13 +6,17 @@ import {
   findAsset,
   fpsValue,
   glitchAt,
+  cropsToFrameCell,
+  isConstant,
+  lensCoefficients,
+  lensSource,
   letterboxBar,
   maskGeometry,
   layerCurves,
   MASK_FEATHER,
-  revealLines,
   TEXT_LINE_HEIGHT,
-  textReveal,
+  textLinesAt,
+  transitionFx,
   transitionMask,
   type Asset,
   type BlendMode,
@@ -101,7 +105,9 @@ export class LiveCompositor {
     for (const layer of plan.layers) {
       const clip = layer.clip;
       const clipFrame = layer.clipOffset;
-      const curves = layerCurves(clip, { width: W, height: H, hasOutgoing: layer.hasOutgoing, fps, markers: project.markers });
+      const curveOpts = { width: W, height: H, hasOutgoing: layer.hasOutgoing, fps, markers: project.markers, transitionOut: layer.transitionOut };
+      const curves = layerCurves(clip, curveOpts);
+      const tfx = transitionFx(clip, clipFrame, curveOpts);
       const st = evalLayer(curves, clipFrame);
       // Keyframed x/y are in project pixels, the rest of the curves in canvas pixels.
       const base = curves.x[0]!;
@@ -117,7 +123,11 @@ export class LiveCompositor {
       let src: CanvasImageSource | undefined;
       let sw = 0;
       let sh = 0;
-      if (clip.type === "media") {
+      if (clip.type === "adjustment") {
+        // Adjustment layer: a copy of everything composited so far is the source.
+        this.scratch(4, W, H).drawImage(ctx.canvas, 0, 0);
+        [src, sw, sh] = [this.scratchCanvases[4]!, W, H];
+      } else if (clip.type === "media") {
         const asset = findAsset(project, clip.assetId);
         if (!asset) continue;
         if (asset.kind === "image") {
@@ -146,9 +156,11 @@ export class LiveCompositor {
       }
 
       // Glitch bursts (R/B split) and shape masks need the layer drawn offscreen first.
-      const split = Math.round(glitchShift(clip, clipFrame) * W);
+      const split = Math.round((glitchShift(clip, clipFrame) + tfx.rgbShift) * W);
       const masks = clip.effects.filter((e) => e.enabled && e.type === "mask");
-      const offscreen = split !== 0 || masks.length > 0;
+      const stylized = clip.effects.some((e) => e.enabled && STYLIZE_LIVE.has(e.type));
+      const smear = tfx.blurRadius >= 1;
+      const offscreen = split !== 0 || masks.length > 0 || stylized || smear;
       const out = ctx;
       if (offscreen) ctx = this.scratch(0, W, H);
       ctx.save();
@@ -156,7 +168,7 @@ export class LiveCompositor {
         ctx.globalAlpha = st.opacity;
         ctx.globalCompositeOperation = COMPOSITE_OPS[clip.blendMode];
       }
-      ctx.filter = cssFilter(clip, k);
+      ctx.filter = cssFilter(clip, k, tfx.zoomSigma);
       ctx.translate(W / 2 + x, H / 2 + y);
       if (st.rotation) ctx.rotate((st.rotation * Math.PI) / 180);
       const mask = transitionMask(clip, clipFrame);
@@ -168,7 +180,7 @@ export class LiveCompositor {
       } else if (clip.type === "text") {
         ctx.scale(st.scale, st.scale);
         if (mask) clipMask(ctx, mask, W, H);
-        drawText(ctx, clip, W, H, k, textReveal(clip, clipFrame));
+        drawText(ctx, clip, W, H, k, textLinesAt(clip, clipFrame));
       } else if (src && sw && sh) {
         const cr = clip.transform.crop;
         const cx0 = sw * cr.left;
@@ -185,6 +197,12 @@ export class LiveCompositor {
         dw *= st.scale;
         dh *= st.scale;
         if (mask) clipMask(ctx, mask, dw, dh);
+        // Slides/whips move the framed picture, not a fill-fit source's overflow (as the export).
+        if (curves.scale.every(isConstant) && cropsToFrameCell(clip, layer.transitionOut)) {
+          ctx.beginPath();
+          ctx.rect(-W / 2, -H / 2, W, H);
+          ctx.clip();
+        }
         if (hasFlip(clip, "horizontal")) ctx.scale(-1, 1);
         if (hasFlip(clip, "vertical")) ctx.scale(1, -1);
         const key = clip.effects.find((e) => e.enabled && e.type === "chromaKey");
@@ -200,7 +218,9 @@ export class LiveCompositor {
       ctx.restore();
       if (offscreen) {
         ctx = out;
-        const layerCanvas = split ? this.channelSplit(W, H, split) : this.scratchCanvases[0]!;
+        let layerCanvas = split ? this.channelSplit(W, H, split) : this.scratchCanvases[0]!;
+        if (smear) layerCanvas = this.smear(layerCanvas, W, H, tfx.blurAngle, tfx.blurRadius);
+        if (stylized) layerCanvas = this.stylize(layerCanvas, clip, W, H, k);
         if (masks.length) applyMasks(layerCanvas, masks, W, H);
         ctx.save();
         ctx.globalAlpha = st.opacity;
@@ -225,7 +245,7 @@ export class LiveCompositor {
     let c = this.scratchCanvases[i];
     if (!c) this.scratchCanvases[i] = c = document.createElement("canvas");
     if (c.width !== W || c.height !== H) [c.width, c.height] = [W, H];
-    const g = c.getContext("2d", { willReadFrequently: i === 3 })!; // #3 is read back for keying
+    const g = c.getContext("2d", { willReadFrequently: i === 3 || i === 5 })!; // #3 (keying) and #5 (lens) are read back
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.globalAlpha = 1;
     g.globalCompositeOperation = "source-over";
@@ -255,6 +275,81 @@ export class LiveCompositor {
       merged.drawImage(this.scratchCanvases[2]!, dx, 0);
     }
     return this.scratchCanvases[1]!;
+  }
+
+  /**
+   * Directional motion blur (approximation of the export's dblur): the running
+   * average of 8 copies spread along the blur direction over `radius` px.
+   */
+  private smear(layer: HTMLCanvasElement, W: number, H: number, angleDeg: number, radius: number): HTMLCanvasElement {
+    const g = this.scratch(6, W, H);
+    const n = 8;
+    const [dx, dy] = [Math.cos((angleDeg * Math.PI) / 180), Math.sin((angleDeg * Math.PI) / 180)];
+    for (let i = 0; i < n; i++) {
+      const o = (i / (n - 1) - 0.5) * radius;
+      g.globalAlpha = 1 / (i + 1);
+      g.drawImage(layer, dx * o, dy * o);
+    }
+    return this.scratchCanvases[6]!;
+  }
+
+  private lensMaps = new Map<string, Int32Array>();
+
+  /**
+   * Vignette, scanlines and lens distortion on a layer canvas, in the export's
+   * order (colour effects, then lens distortion last). Vignette is an
+   * approximation; scanlines and the lens mapping use the export's geometry.
+   */
+  private stylize(layer: HTMLCanvasElement, clip: Clip, W: number, H: number, k: number): HTMLCanvasElement {
+    const g = layer.getContext("2d")!;
+    for (const e of clip.effects) {
+      if (!e.enabled) continue;
+      const p = e.params as Record<string, number | string>;
+      g.save();
+      g.globalCompositeOperation = "source-atop"; // only where the layer has pixels
+      if (e.type === "vignette") {
+        const r = Math.hypot(W, H) / 2;
+        const grad = g.createRadialGradient(W / 2, H / 2, r * 0.35, W / 2, H / 2, r);
+        grad.addColorStop(0, "rgba(0,0,0,0)");
+        grad.addColorStop(1, `rgba(0,0,0,${Math.min(1, 0.25 + Number(p.amount) * 0.75)})`);
+        g.fillStyle = grad;
+        g.fillRect(0, 0, W, H);
+      } else if (e.type === "scanlines" && Number(p.amount) > 0) {
+        const sp = Math.max(2, Math.round(Number(p.spacing) * k));
+        const t = Math.max(1, Math.floor(sp / 2));
+        g.fillStyle = `rgba(0,0,0,${Number(p.amount)})`;
+        for (let y = 0; y < H; y += sp) g.fillRect(0, y, W, t);
+      }
+      g.restore();
+    }
+    const lens = clip.effects.find((e) => e.enabled && e.type === "lensDistortion" && Number(e.params.amount) !== 0);
+    if (!lens) return layer;
+    const amount = Number(lens.params.amount);
+    const key = `${W}x${H}:${amount}`;
+    let map = this.lensMaps.get(key);
+    if (!map) {
+      map = new Int32Array(W * H);
+      const kk = lensCoefficients(amount);
+      for (let y = 0; y < H; y++)
+        for (let x = 0; x < W; x++) {
+          const [sx, sy] = lensSource(x + 0.5, y + 0.5, W, H, kk);
+          const ix = Math.floor(sx);
+          const iy = Math.floor(sy);
+          map[y * W + x] = ix >= 0 && iy >= 0 && ix < W && iy < H ? iy * W + ix : -1;
+        }
+      if (this.lensMaps.size > 8) this.lensMaps.clear();
+      this.lensMaps.set(key, map);
+    }
+    const out = this.scratch(5, W, H);
+    out.drawImage(layer, 0, 0);
+    const src = out.getImageData(0, 0, W, H);
+    const dst = out.createImageData(W, H);
+    const s32 = new Uint32Array(src.data.buffer);
+    const d32 = new Uint32Array(dst.data.buffer);
+    const fill = lens.params.edges === "transparent" ? 0 : 0xff000000; // little-endian ABGR: opaque black
+    for (let i = 0; i < map.length; i++) d32[i] = map[i]! >= 0 ? s32[map[i]!]! : fill;
+    out.putImageData(dst, 0, 0);
+    return this.scratchCanvases[5]!;
   }
 
   /** Source region drawn at w×h with the chroma key applied per pixel (same formula as the export). */
@@ -344,6 +439,9 @@ export class LiveCompositor {
   }
 }
 
+/** Effects the live preview draws in a post pass on the layer canvas (see `stylize`). */
+const STYLIZE_LIVE = new Set(["vignette", "scanlines", "lensDistortion"]);
+
 /** Canvas equivalents of the export’s blend modes. */
 const COMPOSITE_OPS: Record<BlendMode, GlobalCompositeOperation> = {
   normal: "source-over",
@@ -400,8 +498,9 @@ function glitchShift(clip: Clip, frame: number): number {
   return clip.effects.reduce((s, e) => s + (e.enabled && e.type === "glitch" ? glitchAt(e.params, frame).shift : 0), 0);
 }
 
-function cssFilter(clip: Clip, k: number): string {
+function cssFilter(clip: Clip, k: number, zoomSigma = 0): string {
   const parts: string[] = [];
+  if (zoomSigma >= 0.3) parts.push(`blur(${zoomSigma.toFixed(1)}px)`);
   for (const e of clip.effects) {
     if (!e.enabled) continue;
     const p = e.params as Record<string, number>;
@@ -446,21 +545,20 @@ function clipMask(ctx: CanvasRenderingContext2D, m: NonNullable<ReturnType<typeo
   ctx.clip();
 }
 
-function drawText(ctx: CanvasRenderingContext2D, clip: Clip & { type: "text" }, W: number, H: number, k: number, visible: number) {
+function drawText(ctx: CanvasRenderingContext2D, clip: Clip & { type: "text" }, W: number, H: number, k: number, lines: string[]) {
   const s = clip.style;
   const size = s.fontSize * k;
   ctx.font = `${s.bold ? "700" : "400"} ${size}px "${s.fontFamily}", sans-serif`;
   ctx.textBaseline = "middle";
-  // Layout uses every line (fixed grid); typewriter only truncates what is drawn.
-  const lines = revealLines(clip.text, visible);
+  // Layout uses every line (fixed grid); reveals only change what is drawn.
   const lh = size * TEXT_LINE_HEIGHT;
   const margin = W * 0.08;
   const total = lh * lines.length;
   ctx.textAlign = s.align;
   const x = s.align === "left" ? -W / 2 + margin : s.align === "right" ? W / 2 - margin : 0;
-  const typing = visible < Array.from(clip.text.replace(/\r?\n/g, "")).length;
+  const animating = lines.join("\n") !== clip.text.replace(/\r\n/g, "\n");
   lines.forEach((line, i) => {
-    if (typing && !line) return; // not typed yet (the export skips these lines too)
+    if (animating && !line) return; // not revealed yet (the export skips these runs too)
     const y = -total / 2 + lh * (i + 0.5);
     if (s.box) {
       const m = ctx.measureText(line);

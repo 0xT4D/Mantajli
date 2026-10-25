@@ -14,9 +14,8 @@ import {
   maskGeometry,
   sourceOffset,
   speedAt,
-  revealLines,
   REVEAL_ANIMATIONS,
-  textReveal,
+  textLinesAt,
   transitionMask,
   type Asset,
   type BlendMode,
@@ -28,6 +27,11 @@ import {
   type TextClip,
   type VisualLayer,
   TEXT_LINE_HEIGHT,
+  BACK_S,
+  GEOMETRY_EFFECTS,
+  lensCoefficients,
+  transitionFx,
+  cropsToFrameCell,
 } from "@mantagli/core";
 
 /**
@@ -39,6 +43,13 @@ import {
  * timeline position. Compositing happens in RGB; the output is converted
  * once to BT.709 at the end so colour stays consistent across sources.
  */
+
+/**
+ * Version of the graph builder's output. Part of every composition cache key:
+ * bump it whenever the same plan renders different pixels (a fixed or changed
+ * effect, transition or text renderer), so cached previews are not reused.
+ */
+export const RENDERER_VERSION = 6;
 
 export interface SceneFrames {
   /** Directory of rendered PNG frames named frame_00001.png (1-based). */
@@ -95,6 +106,17 @@ function easeExpr(easing: string, u: string): string {
       return `(1-(1-${u})*(1-${u}))`;
     case "easeInOut":
       return `(${u})*(${u})*(3-2*(${u}))`;
+    // Same formulas as core `ease` (timeline.ts).
+    case "expoIn":
+      return `((pow(2,10*(${u}))-1)/1023)`;
+    case "expoOut":
+      return `((1-pow(2,-10*(${u})))*${n6(1024 / 1023)})`;
+    case "expoInOut":
+      return `if(lt(${u},0.5),(pow(2,20*(${u}))-1)/2046,0.5+(1-pow(2,-10*(2*(${u})-1)))*${n6(512 / 1023)})`;
+    case "backIn":
+      return `(${n6(BACK_S + 1)}*pow(${u},3)-${n6(BACK_S)}*pow(${u},2))`;
+    case "backOut":
+      return `(1+${n6(BACK_S + 1)}*pow((${u})-1,3)+${n6(BACK_S)}*pow((${u})-1,2))`;
     default:
       return "0";
   }
@@ -247,6 +269,12 @@ function effectStatements(effects: Effect[], inLabel: string, id: string, px: nu
       case "grain":
         chain.push(`noise=alls=${Math.round(num("amount"))}:allf=t`);
         break;
+      case "scanlines": {
+        // Horizontal lines every `spacing` px, half as thick (the vertical grid line sits off-frame).
+        const sp = Math.max(2, Math.round(num("spacing") * px));
+        if (num("amount") > 0) chain.push(`drawgrid=x=iw:y=0:w=iw+${sp}:h=${sp}:t=${Math.max(1, Math.floor(sp / 2))}:c=black@${n6(num("amount"))}`);
+        break;
+      }
       case "blur":
         if (num("radius") > 0) chain.push(`gblur=sigma=${n6(Math.max(0.1, (num("radius") * px) / 2))}`);
         break;
@@ -310,6 +338,90 @@ export function rampRetime(clip: Clip, clipOffset: number, frames: number, fps: 
   return { filter: `setpts='st(0,PTS*TB-${n6(lead)});(${terms.join("+")})/TB',fps=${fps}:round=up`, sourceSeconds: last.s };
 }
 
+/** Geometric effects (lens distortion) on an RGBA stream: colour and alpha move together. */
+function geometryFilters(effects: Effect[]): string[] {
+  const out: string[] = [];
+  for (const fx of effects) {
+    if (!fx.enabled || !GEOMETRY_EFFECTS.has(fx.type)) continue;
+    if (fx.type === "lensDistortion") {
+      const k = lensCoefficients(Number(fx.params.amount));
+      if (k.k1 === 0 && k.k2 === 0) continue;
+      out.push("format=gbrap", `lenscorrection=k1=${n6(k.k1)}:k2=${n6(k.k2)}:i=bilinear:fc=${fx.params.edges === "transparent" ? "black@0" : "black"}`);
+    }
+  }
+  return out;
+}
+
+/**
+ * Per-frame filters of two-sided transitions (core `transitionFx`): directional
+ * motion blur for whips, gaussian blur for zooms, RGB split for glitch cuts.
+ * Values change through sendcmd (layer-local time); each filter is enabled
+ * only over the frames where it is active.
+ */
+function transitionStage(clip: Clip, clipOffset: number, frames: number, fps: number, opts: Parameters<typeof transitionFx>[2], id: string, ctx: GraphContext): string[] {
+  const fx = Array.from({ length: frames }, (_, j) => transitionFx(clip, clipOffset + j, opts));
+  const out: string[] = [];
+  const blur: string[] = [];
+  const split: string[] = [];
+  const stage = (key: "blurRadius" | "zoomSigma" | "rgbShift", into: string[], filter: (name: string, v: number) => { init: string[]; cmd: (v: number) => string }, quant: (v: number) => number) => {
+    const vals = fx.map((f) => quant(f[key]));
+    const on = vals.map((v, j) => (v !== 0 ? j : -1)).filter((j) => j >= 0);
+    if (!on.length) return;
+    const name = `${key}${id}`;
+    const f = filter(name, vals[on[0]!]!);
+    const lines: string[] = [];
+    let prev = Number.NaN;
+    vals.forEach((v, j) => {
+      if (v !== prev && v !== 0) lines.push(`${n6(j / fps)} ${f.cmd(v)};`);
+      if (v !== 0) prev = v;
+    });
+    const file = `${id}${key}.cmd`;
+    ctx.writeFile(file, lines.join("\n"));
+    const enable = `enable='between(t,${n6((on[0]! - 0.5) / fps)},${n6((on[on.length - 1]! + 0.5) / fps)})'`;
+    into.push(`sendcmd=f=${file}`, ...f.init.map((x) => `${x}:${enable}`));
+  };
+  const angle = fx.find((f) => f.blurRadius > 0)?.blurAngle ?? 0;
+  // Margin along the blur axis so the seam between the two shots blurs too
+  // (dblur clamps at the frame edge); symmetric, so the centred layer stays put.
+  // The incoming shot (on top) gets a transparent margin and fades in over the
+  // outgoing one, whose margin repeats its edge pixels — so nothing behind the
+  // pair (black background) bleeds through the seam.
+  const maxBlur = Math.max(...fx.map((f) => f.blurRadius));
+  if (maxBlur >= 0.5) {
+    const m = Math.ceil(maxBlur * 1.5) + 2;
+    const v = angle === 90;
+    const fadesIn = !!clip.transitionIn && WHIP_TRANSITIONS.has(clip.transitionIn.type) && !(opts.transitionOut && WHIP_TRANSITIONS.has(opts.transitionOut.type));
+    out.push(v ? `pad=w=iw:h=ih+${2 * m}:x=0:y=${m}:color=black@0` : `pad=w=iw+${2 * m}:h=ih:x=${m}:y=0:color=black@0`);
+    if (!fadesIn) out.push(v ? `fillborders=top=${m}:bottom=${m}:mode=smear` : `fillborders=left=${m}:right=${m}:mode=smear`);
+  }
+  // dblur is a one-sided exponential streak: a pair of opposite streaks gives a
+  // symmetric kernel; 0.25·L per side roughly matches the spread of a box of
+  // length L (the shutter-length motion blur).
+  stage(
+    "blurRadius",
+    blur,
+    (name, v) => ({
+      init: [`dblur@${name}a=angle=${angle}:radius=${n6(v * 0.25)}`, `dblur@${name}b=angle=${angle + 180}:radius=${n6(v * 0.25)}`],
+      cmd: (x) => `dblur@${name}a radius ${n6(x * 0.25)}, dblur@${name}b radius ${n6(x * 0.25)}`,
+    }),
+    (v) => Math.round(v * 2) / 2,
+  );
+  stage("zoomSigma", blur, (name, v) => ({ init: [`gblur@${name}=sigma=${n6(v)}`], cmd: (x) => `gblur@${name} sigma ${n6(x)}` }), (v) => (v < 0.3 ? 0 : Math.round(v * 4) / 4));
+  stage(
+    "rgbShift",
+    split,
+    (name, v) => ({ init: [`rgbashift@${name}=rh=${Math.round(v * opts.width)}:bh=${-Math.round(v * opts.width)}`], cmd: (x) => `rgbashift@${name} rh ${Math.round(x * opts.width)}, rgbashift@${name} bh ${-Math.round(x * opts.width)}` }),
+    (v) => Math.round(v * opts.width) / opts.width,
+  );
+  // Blur premultiplied colour so transparent (black) pixels do not darken the
+  // edges they blur into: c' = blur(c·a) / blur(a).
+  if (blur.length) out.push("premultiply=inplace=1", ...blur, "unpremultiply=inplace=1");
+  out.push(...split);
+  return out.length ? ["format=gbrap", ...out] : [];
+}
+
+const WHIP_TRANSITIONS = new Set(["whipLeft", "whipRight", "whipUp", "whipDown"]);
+
 // ------------------------------------------------------------------ main builder
 
 export function buildGraph(ctx: GraphContext): BuiltGraph {
@@ -335,9 +447,30 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     const src = `${id}src`;
     let hasAlpha = false;
     let fullFrame = false;
+    /** Adjustment layers: the untouched composite before and after the layer, joined back by concat. */
+    let adjust: { pre?: string; post: string } | undefined;
 
     // --- source
     switch (clip.type) {
+      case "adjustment": {
+        // The composite below, cut into before / during / after. Only the middle
+        // runs through this layer's chain (as its source) and is laid back over
+        // the untouched middle; concat joins the three again. A time-shifted
+        // split branch would instead make FFmpeg queue every frame before the
+        // layer starts.
+        const S = layer.start - plan.rangeStart;
+        const E = S + layer.frames;
+        const outs = [`${id}a1`, `${id}a2`, `${id}a3`, ...(S > 0 ? [`${id}a0`] : [])];
+        stmts.push(`[${base}]split=${outs.length}${outs.map((o) => `[${o}]`).join("")}`);
+        if (S > 0) stmts.push(`[${id}a0]trim=end_frame=${S},setpts=PTS-STARTPTS[${id}pre]`);
+        stmts.push(`[${id}a1]trim=start_frame=${S}:end_frame=${E},setpts=PTS-STARTPTS[${src}]`);
+        stmts.push(`[${id}a2]trim=start_frame=${S}:end_frame=${E}[${id}mid]`);
+        stmts.push(`[${id}a3]trim=start_frame=${E},setpts=PTS-STARTPTS[${id}post]`);
+        base = `${id}mid`;
+        adjust = { pre: S > 0 ? `${id}pre` : undefined, post: `${id}post` };
+        fullFrame = true;
+        break;
+      }
       case "media": {
         const asset = findAsset(project, clip.assetId)!;
         const file = ctx.mediaPath(asset);
@@ -365,7 +498,11 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
             stmts.push(`[${inputs.length - 1}:v]${retime},fps=${fpsR},tpad=stop_mode=clone:stop=${layer.frames},trim=end_frame=${layer.frames},reverse,setpts=PTS-STARTPTS[${src}]`);
           } else {
             const srcSeconds = layerSec * layer.speed + 0.5;
-            inputs.push(["-ss", n6(layer.sourceStart), "-t", n6(srcSeconds), "-i", file]);
+            // A range that starts past the end of the source (the frozen tail under a
+            // transition, when the clip has no handles) seeks to the last frame; tpad
+            // then holds it. Seeking past the end would yield no frames at all.
+            const lastFrame = asset.meta.duration ? Math.max(0, asset.meta.duration - 2 / fps) : Infinity;
+            inputs.push(["-ss", n6(Math.min(layer.sourceStart, lastFrame)), "-t", n6(srcSeconds), "-i", file]);
             const retime = layer.speed === 1 ? "setpts=PTS-STARTPTS" : `setpts=(PTS-STARTPTS)/${n6(layer.speed)}`;
             stmts.push(`[${inputs.length - 1}:v]${retime},fps=${fpsR}[${src}]`);
           }
@@ -416,14 +553,14 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
         };
         let draws: string[];
         if (REVEAL_ANIMATIONS.has(clip.animation.in) || REVEAL_ANIMATIONS.has(clip.animation.out)) {
-          // Typewriter: one drawtext per (line, visible prefix), enabled for the
-          // frames where that prefix shows (layer-local t, half-frame margins).
+          // Typewriter/scramble: one drawtext per (line, drawn text) run, enabled for
+          // the frames where that text shows (layer-local t, half-frame margins).
           draws = [];
           lines.forEach((_, i) => {
             let runStart = 0;
             let cur: string | null = null;
             for (let j = 0; j <= layer.frames; j++) {
-              const v = j < layer.frames ? revealLines(clip.text, textReveal(clip, layer.clipOffset + j))[i]! : null;
+              const v = j < layer.frames ? textLinesAt(clip, layer.clipOffset + j)[i]! : null;
               if (v === cur) continue;
               if (cur) draws.push(drawLine(cur, i, `${id}_${i}_${draws.length}.txt`, `between(t,${n6((runStart - 0.5) / fps)},${n6((j - 0.5) / fps)})`));
               cur = v;
@@ -445,7 +582,8 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     if (cr.left || cr.right || cr.top || cr.bottom)
       chain.push(`crop=w=iw*${n6(1 - cr.left - cr.right)}:h=ih*${n6(1 - cr.top - cr.bottom)}:x=iw*${n6(cr.left)}:y=ih*${n6(cr.top)}`);
 
-    const curves = layerCurves(clip, { width: W, height: H, hasOutgoing: layer.hasOutgoing, fps, markers: project.markers });
+    const curveOpts = { width: W, height: H, hasOutgoing: layer.hasOutgoing, fps, markers: project.markers, transitionOut: layer.transitionOut };
+    const curves = layerCurves(clip, curveOpts);
     // Curves were built in output pixels for slides; keyframed x/y are in project pixels.
     const T = plus("t", layer.clipOffset / fps); // clip-relative seconds inside the layer chain
     let sMax = 0;
@@ -464,13 +602,15 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     } else if (staticScale !== 1) {
       chain.push(`scale=w=${even(W * staticScale)}:h=${even(H * staticScale)}`);
     }
+    // Slides/whips move the picture seen in the frame, not a fill-fit source's overflow.
+    if (!fullFrame && !scaleAnimated && cropsToFrameCell(clip, layer.transitionOut)) chain.push(`crop=w='min(iw,${W})':h='min(ih,${H})'`);
     stmts.push(`[${src}]${chain.join(",")}[${id}p]`);
     let cur = `${id}p`;
 
     // --- effects (alpha-preserving wrapper for layers with transparency)
     // Motion effects are curves (applied below), not filters.
     const keyFx = clip.effects.find((e) => e.enabled && e.type === "chromaKey");
-    const active = clip.effects.filter((e) => e.enabled && !MOTION_EFFECTS.has(e.type) && !FRAME_EFFECTS.has(e.type) && e.type !== "chromaKey");
+    const active = clip.effects.filter((e) => e.enabled && !MOTION_EFFECTS.has(e.type) && !FRAME_EFFECTS.has(e.type) && !GEOMETRY_EFFECTS.has(e.type) && e.type !== "chromaKey");
     const timing: LayerTiming = { clipOffset: layer.clipOffset, frames: layer.frames, fps, width: W };
     if (keyFx) {
       // Chroma key: the matte comes from the ungraded pixels (combined with any
@@ -501,6 +641,16 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
         cur = fx.out;
       }
     }
+    const geo = geometryFilters(clip.effects);
+    if (geo.length) {
+      stmts.push(`[${cur}]${geo.join(",")}[${id}geo]`);
+      cur = `${id}geo`;
+    }
+    const tfx = transitionStage(clip, layer.clipOffset, layer.frames, fps, curveOpts, id, ctx);
+    if (tfx.length) {
+      stmts.push(`[${cur}]${tfx.join(",")}[${id}tfx]`);
+      cur = `${id}tfx`;
+    }
 
     // --- opacity, rotate, animated scale, shift
     // Order matters: filters after a per-frame `scale` keep the size they were
@@ -529,7 +679,7 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     if (wipe && layer.clipOffset < clip.transitionIn!.duration) {
       const d = clip.transitionIn!.duration;
       const u = `clip(${plus("T", layer.clipOffset / fps)}*${n6(fps / d)},0,1)`;
-      const p = `(${u}*${u}*(3-2*${u}))`;
+      const p = easeExpr(clip.transitionIn!.easing ?? "easeInOut", u);
       const f = `(W*${n6(MASK_FEATHER)})`;
       const m =
         wipe.shape === "right" ? `((W+${f})*${p}-X)/${f}`
@@ -612,6 +762,14 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
       const lb = `${id}lb${fx.id.replace(/\W/g, "")}`;
       stmts.push(`[${base}]drawbox=x=0:y=0:w=iw:h=${bar}:color=${col}:t=fill:${on},drawbox=x=0:y=ih-${bar}:w=iw:h=${bar}:color=${col}:t=fill:${on}[${lb}]`);
       base = lb;
+    }
+
+    // --- adjustment layers: rejoin before / processed middle / after
+    if (adjust) {
+      stmts.push(`[${base}]setpts=PTS-STARTPTS[${id}mo]`);
+      const segs = [adjust.pre, `${id}mo`, adjust.post].filter(Boolean) as string[];
+      stmts.push(`${segs.map((x) => `[${x}]`).join("")}concat=n=${segs.length}:v=1:a=0[${id}cat]`);
+      base = `${id}cat`;
     }
   });
 

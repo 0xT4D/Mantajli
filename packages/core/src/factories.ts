@@ -1,5 +1,7 @@
+import type { z } from "zod";
 import { newId } from "./ids.js";
 import {
+  AdjustmentClipSchema,
   ColorClipSchema,
   MediaClipSchema,
   ProjectSchema,
@@ -8,6 +10,7 @@ import {
   SceneObjectSchema,
   TextClipSchema,
   TrackSchema,
+  type AdjustmentClip,
   type Clip,
   type ColorClip,
   type MediaClip,
@@ -86,7 +89,14 @@ export function makeColorClip(init: ClipInit<ColorClip>): ColorClip {
   return ColorClipSchema.parse({ id: newId("clip"), ...init, type: "color" });
 }
 
-export function makeSceneObject(init: Partial<SceneObject> & Pick<SceneObject, "kind" | "name">): SceneObject {
+export function makeAdjustmentClip(init: ClipInit<AdjustmentClip>): AdjustmentClip {
+  return AdjustmentClipSchema.parse({ id: newId("clip"), ...init, type: "adjustment" });
+}
+
+export type SceneObjectInit = Partial<z.input<typeof SceneObjectSchema>> & Pick<SceneObject, "kind" | "name">;
+
+/** Scene object from partial input; omitted fields (including nested ones) take their schema defaults. */
+export function makeSceneObject(init: SceneObjectInit): SceneObject {
   return SceneObjectSchema.parse({ id: newId("obj"), ...init });
 }
 

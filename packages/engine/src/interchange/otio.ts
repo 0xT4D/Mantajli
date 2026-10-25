@@ -291,6 +291,8 @@ export async function importOtio(engine: Engine, file: string, source: "user" | 
             clipId = tx.dispatch("clip.add", { trackId, clip: { type: "text", text: mClip.text, start: pos, duration, style: mClip.style, animation: mClip.animation, transform: mClip.transform, name } }).clipId;
           } else if (mClip?.type === "color") {
             clipId = tx.dispatch("clip.add", { trackId, clip: { type: "color", fill: mClip.fill, start: pos, duration, name } }).clipId;
+          } else if (mClip?.type === "adjustment") {
+            clipId = tx.dispatch("clip.add", { trackId, clip: { type: "adjustment", start: pos, duration, name } }).clipId;
           } else if (mClip?.type === "scene" && sceneIdMap.has(mClip.sceneId)) {
             clipId = tx.dispatch("clip.add", { trackId, clip: { type: "scene", sceneId: sceneIdMap.get(mClip.sceneId)!, start: pos, duration, sourceIn, name } }).clipId;
           } else {

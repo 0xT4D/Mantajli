@@ -84,7 +84,7 @@ export async function analyzeAudio(
   );
   const waveform = acc.waveform();
   if (opts.waveformOut) await writeFileAtomic(opts.waveformOut, JSON.stringify(waveform));
-  return { waveform, ...(opts.beats ? { beats: detectBeats(acc.envelope) } : {}) };
+  return { waveform, ...(opts.beats ? { beats: detectBeats(acc.envelope, { rms: acc.rms, bright: acc.bright }) } : {}) };
 }
 
 export function toBeatAnalysis(b: BeatResult): BeatAnalysis {
@@ -94,6 +94,7 @@ export function toBeatAnalysis(b: BeatResult): BeatAnalysis {
     strengths: b.strengths,
     downbeats: b.downbeats,
     onsets: b.onsets,
+    sections: b.sections,
     confidence: b.confidence,
     analyzedAt: new Date().toISOString(),
   };

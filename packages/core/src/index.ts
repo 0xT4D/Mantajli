@@ -1,4 +1,5 @@
 export * from "./animation.js";
+export * from "./cameraRigs.js";
 export * from "./captions.js";
 export * from "./commands.js";
 export * from "./composition.js";

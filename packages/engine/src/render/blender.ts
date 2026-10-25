@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,19 @@ export function blenderScriptPath(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   // src/render -> repo/blender (dev) ; bundled builds set MANTAGLI_BLENDER_SCRIPT
   return path.resolve(here, "../../../../blender/mantagli_scene.py");
+}
+
+let scriptVersion: string | undefined;
+/** Hash of the Blender scene script. Part of every 3D cache key, so script changes re-render. */
+export function blenderScriptVersion(): string {
+  if (scriptVersion === undefined) {
+    try {
+      scriptVersion = sha1(readFileSync(blenderScriptPath(), "utf8")).slice(0, 10);
+    } catch {
+      scriptVersion = "missing";
+    }
+  }
+  return scriptVersion;
 }
 
 export interface SceneJobSpec {
@@ -32,7 +46,7 @@ export function sceneRenderKey(spec: SceneJobSpec): string {
   const { scene, project } = spec;
   const files: Record<string, string> = {};
   for (const o of scene.objects) {
-    const ids = [o.model?.assetId, o.text?.fontAssetId].filter(Boolean) as string[];
+    const ids = [o.model?.assetId, o.text?.fontAssetId, o.media?.assetId, o.scatter?.modelAssetId].filter(Boolean) as string[];
     for (const id of ids) {
       const a = findAsset(project, id);
       if (a) files[id] = a.hash;
@@ -42,6 +56,7 @@ export function sceneRenderKey(spec: SceneJobSpec): string {
   return sha1(
     JSON.stringify({
       v: 2,
+      script: blenderScriptVersion(),
       pixels,
       w: project.settings.width,
       h: project.settings.height,
@@ -109,11 +124,19 @@ export async function renderSceneFrames(spec: SceneJobSpec, opts: BlenderRunOpti
   if (opts.saveBlend) await ensureDir(path.dirname(opts.saveBlend));
   const assets: Record<string, string> = {};
   const fonts: Record<string, string> = {};
+  const media: Record<string, { path: string; width?: number; height?: number; fps?: number; frames?: number }> = {};
   for (const o of spec.scene.objects) {
-    if (o.model) {
-      const a = findAsset(spec.project, o.model.assetId);
+    for (const id of [o.model?.assetId, o.scatter?.modelAssetId]) {
+      if (!id) continue;
+      const a = findAsset(spec.project, id);
       if (!a || a.status !== "ok") fail("missing_asset", `Model for "${o.name}" is missing`);
       assets[a.id] = a.path;
+    }
+    if (o.media) {
+      const a = findAsset(spec.project, o.media.assetId);
+      if (!a || a.status !== "ok") fail("missing_asset", `Image/video for "${o.name}" is missing${a ? ` (${a.path})` : ""}`);
+      const fps = a.meta.fps ? a.meta.fps.num / a.meta.fps.den : undefined;
+      media[a.id] = { path: a.path, width: a.meta.width, height: a.meta.height, fps, frames: a.meta.duration && fps ? Math.floor(a.meta.duration * fps) : undefined };
     }
     if (o.text?.fontAssetId) {
       const a = findAsset(spec.project, o.text.fontAssetId);
@@ -129,6 +152,7 @@ export async function renderSceneFrames(spec: SceneJobSpec, opts: BlenderRunOpti
     quality: spec.quality,
     assets,
     fonts,
+    media,
     defaultFont: spec.defaultFont,
     outputDir: opts.outputDir,
     frames: toRanges(missing),

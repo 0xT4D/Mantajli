@@ -238,10 +238,98 @@ def make_material(name, m):
     set_input(bsdf, ["Transmission Weight", "Transmission"], trans)
     if preset.get("coat"):
         set_input(bsdf, ["Coat Weight", "Clearcoat"], preset["coat"])
-    if m["emissionStrength"] > 0:
+    if m.get("pattern", "none") == "grid":
+        add_grid_pattern(mat, bsdf, m)
+    elif m.get("pattern", "none") == "smoke":
+        add_smoke_pattern(mat, bsdf, m)
+    elif m["emissionStrength"] > 0:
         set_input(bsdf, ["Emission Color", "Emission"], rgba(m["emissionColor"]))
         set_input(bsdf, ["Emission Strength"], m["emissionStrength"])
     return mat
+
+
+def add_grid_pattern(mat, bsdf, m):
+    """Glowing grid lines every patternScale metres (world X/Y), drawn as emission."""
+    nt = mat.node_tree
+    nodes, links = nt.nodes, nt.links
+    geo = nodes.new("ShaderNodeNewGeometry")
+    sep = nodes.new("ShaderNodeSeparateXYZ")
+    links.new(geo.outputs["Position"], sep.inputs["Vector"])
+    half = m.get("patternLineWidth", 0.04) / 2
+    scale = max(1e-3, m.get("patternScale", 1.0))
+    lines = []
+    for axis in ("X", "Y"):
+        # Distance (in cells) to the nearest grid line: |fract(v/scale + 0.5) - 0.5|
+        div = nodes.new("ShaderNodeMath")
+        div.operation = "DIVIDE"
+        div.inputs[1].default_value = scale
+        links.new(sep.outputs[axis], div.inputs[0])
+        add = nodes.new("ShaderNodeMath")
+        add.operation = "ADD"
+        add.inputs[1].default_value = 0.5
+        links.new(div.outputs[0], add.inputs[0])
+        fr = nodes.new("ShaderNodeMath")
+        fr.operation = "FRACT"
+        links.new(add.outputs[0], fr.inputs[0])
+        sub = nodes.new("ShaderNodeMath")
+        sub.operation = "SUBTRACT"
+        sub.inputs[1].default_value = 0.5
+        links.new(fr.outputs[0], sub.inputs[0])
+        ab = nodes.new("ShaderNodeMath")
+        ab.operation = "ABSOLUTE"
+        links.new(sub.outputs[0], ab.inputs[0])
+        # 1 on the line, soft 1-px-ish falloff to 0 off it.
+        mr = nodes.new("ShaderNodeMapRange")
+        mr.interpolation_type = "SMOOTHSTEP"
+        mr.inputs["From Min"].default_value = half
+        mr.inputs["From Max"].default_value = half * 1.8 + 1e-4
+        mr.inputs["To Min"].default_value = 1.0
+        mr.inputs["To Max"].default_value = 0.0
+        links.new(ab.outputs[0], mr.inputs["Value"])
+        lines.append(mr)
+    mx = nodes.new("ShaderNodeMath")
+    mx.operation = "MAXIMUM"
+    links.new(lines[0].outputs["Result"], mx.inputs[0])
+    links.new(lines[1].outputs["Result"], mx.inputs[1])
+    strength = nodes.new("ShaderNodeMath")
+    strength.operation = "MULTIPLY"
+    strength.inputs[1].default_value = max(m["emissionStrength"], 0.0) or 8.0
+    links.new(mx.outputs[0], strength.inputs[0])
+    set_input(bsdf, ["Emission Color", "Emission"], rgba(m["emissionColor"]))
+    links.new(strength.outputs[0], bsdf.inputs["Emission Strength"])
+
+
+def add_smoke_pattern(mat, bsdf, m):
+    """Billowing smoke: fractal noise (patternScale metres) drives emission of the emission colour."""
+    nt = mat.node_tree
+    nodes, links = nt.nodes, nt.links
+    coord = nodes.new("ShaderNodeNewGeometry")  # world-space position: scale is in metres
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = 1.0 / max(1e-3, m.get("patternScale", 1.0))
+    noise.inputs["Detail"].default_value = 9.0
+    if "Roughness" in noise.inputs:
+        noise.inputs["Roughness"].default_value = 0.62
+    links.new(coord.outputs["Position"], noise.inputs["Vector"])
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].position = 0.35
+    ramp.color_ramp.elements[0].color = (0, 0, 0, 1)
+    ramp.color_ramp.elements[1].position = 0.78
+    ramp.color_ramp.elements[1].color = (1, 1, 1, 1)
+    links.new(noise.outputs["Fac"], ramp.inputs["Fac"])
+    strength = nodes.new("ShaderNodeMath")
+    strength.operation = "MULTIPLY"
+    strength.inputs[1].default_value = max(m["emissionStrength"], 0.0) or 2.0
+    links.new(ramp.outputs["Color"], strength.inputs[0])
+    set_input(bsdf, ["Emission Color", "Emission"], rgba(m["emissionColor"]))
+    links.new(strength.outputs[0], bsdf.inputs["Emission Strength"])
+
+
+def use_alpha(mat):
+    """Let a material's alpha show (blend method moved in Blender 4.2)."""
+    if hasattr(mat, "surface_render_method"):
+        mat.surface_render_method = "DITHERED"
+    elif hasattr(mat, "blend_method"):
+        mat.blend_method = "HASHED"
 
 
 def assign(obj, mat):
@@ -276,14 +364,24 @@ def add_primitive(spec):
         ops.primitive_torus_add(major_radius=size / 2, minor_radius=size / 6, major_segments=64, minor_segments=24)
     elif prim == "monkey":
         ops.primitive_monkey_add(size=size)
+    elif prim == "coin":
+        ops.primitive_cylinder_add(radius=size / 2, depth=size * 0.09, vertices=48)
+    elif prim == "crystal":
+        ops.primitive_cone_add(radius1=size * 0.22, radius2=0, depth=size, vertices=6)
+    elif prim == "icosphere":
+        ops.primitive_ico_sphere_add(radius=size / 2, subdivisions=2)
     obj = bpy.context.active_object
+    if prim == "coin":
+        bev = obj.modifiers.new("Bevel", "BEVEL")
+        bev.width = size * 0.012
+        bev.segments = 2
     if prim == "roundedCube":
         bev = obj.modifiers.new("Bevel", "BEVEL")
         bev.width = size * 0.12
         bev.segments = 6
     if prim == "monkey":
         obj.modifiers.new("Subdivision", "SUBSURF").levels = 2
-    if spec["mesh"]["smooth"] and prim not in ("cube", "plane"):
+    if spec["mesh"]["smooth"] and prim not in ("cube", "plane", "crystal"):
         for p in obj.data.polygons:
             p.use_smooth = True
     return obj
@@ -309,6 +407,247 @@ def add_text(spec, job):
     return link(bpy.data.objects.new(spec["name"], curve))
 
 
+def text_to_two_tone_mesh(obj, face_mat, side_mat):
+    """Convert extruded text to a mesh: flat front/back caps get face_mat, sides and bevel side_mat."""
+    deps = bpy.context.evaluated_depsgraph_get()
+    mesh = bpy.data.meshes.new_from_object(obj.evaluated_get(deps))
+    name = obj.name
+    bpy.data.objects.remove(obj, do_unlink=True)
+    new = link(bpy.data.objects.new(name, mesh))
+    mesh.materials.clear()
+    mesh.materials.append(face_mat)
+    mesh.materials.append(side_mat)
+    for poly in mesh.polygons:
+        poly.material_index = 0 if abs(poly.normal.z) > 0.98 else 1
+    return new
+
+
+def add_media(spec, job):
+    """Image/video on an upright plane facing -Y (towards a default camera)."""
+    m = spec["media"]
+    info = job.get("media", {}).get(m["assetId"])
+    if not info or not os.path.exists(info["path"]):
+        raise RuntimeError(f"media file missing for {spec['name']}")
+    img = bpy.data.images.load(info["path"], check_existing=True)
+    aspect = (info.get("height") or 1) / (info.get("width") or 1)
+    w = m["width"]
+    h = w * aspect
+    mesh = bpy.data.meshes.new(spec["name"])
+    mesh.from_pydata([(-w / 2, 0, -h / 2), (w / 2, 0, -h / 2), (w / 2, 0, h / 2), (-w / 2, 0, h / 2)], [], [(0, 1, 2, 3)])
+    uv = mesh.uv_layers.new(name="UVMap")
+    for loop, co in zip(uv.data, [(0, 0), (1, 0), (1, 1), (0, 1)]):
+        loop.uv = co
+    obj = link(bpy.data.objects.new(spec["name"], mesh))
+
+    mat = bpy.data.materials.new(spec["name"] + " media")
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nodes, links = nt.nodes, nt.links
+    nodes.clear()
+    out_node = nodes.new("ShaderNodeOutputMaterial")
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.image = img
+    tex.extension = "CLIP"
+    tex.interpolation = "Cubic"
+    if img.source == "MOVIE":
+        fps = job["fps"]["num"] / job["fps"]["den"]
+        media_fps = info.get("fps") or fps
+        iu = tex.image_user
+        iu.frame_start = 1
+        iu.frame_duration = max(1, int(info.get("frames") or 100000))
+        iu.frame_offset = int(round(m["sourceIn"] * media_fps))
+        iu.use_cyclic = bool(m["loop"])
+        iu.use_auto_refresh = True
+        if abs(media_fps - fps) > 0.01:
+            warn(f"{spec['name']}: video is {media_fps:.3g} fps, scene {fps:.3g} fps — it plays one video frame per scene frame")
+    if m["emission"] > 0:
+        # Glowing screen: unlit, the picture's own colours.
+        em = nodes.new("ShaderNodeEmission")
+        em.inputs["Strength"].default_value = m["emission"]
+        links.new(tex.outputs["Color"], em.inputs["Color"])
+        tr = nodes.new("ShaderNodeBsdfTransparent")
+        mix = nodes.new("ShaderNodeMixShader")
+        links.new(tex.outputs["Alpha"], mix.inputs["Fac"])
+        links.new(tr.outputs[0], mix.inputs[1])
+        links.new(em.outputs[0], mix.inputs[2])
+        links.new(mix.outputs[0], out_node.inputs["Surface"])
+    else:
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+        links.new(tex.outputs["Alpha"], bsdf.inputs["Alpha"])
+        set_input(bsdf, ["Roughness"], 0.55)
+        links.new(bsdf.outputs[0], out_node.inputs["Surface"])
+    use_alpha(mat)
+    mesh.materials.append(mat)
+    return obj
+
+
+def scatter_layout(sc):
+    """Seeded positions, rotations (radians) and scales for a scatter object."""
+    rnd = random.Random(sc["seed"])
+    n = sc["count"]
+    ax, ay, az = sc["area"]
+    dist = sc["distribution"]
+    rj = sc["rotationJitter"]
+    pts, rots, scales = [], [], []
+    cols = max(1, min(n, int(round(math.sqrt(n * max(ax, 1e-6) / max(ay, 1e-6))))))
+    rows = max(1, int(math.ceil(n / cols)))
+    for i in range(n):
+        rot_z = rnd.uniform(-math.pi, math.pi) * rj
+        rot = [rnd.uniform(-math.pi, math.pi) * rj, rnd.uniform(-math.pi, math.pi) * rj, rot_z]
+        if dist == "box":
+            p = (rnd.uniform(-ax, ax), rnd.uniform(-ay, ay), rnd.uniform(-az, az))
+        elif dist == "pile":
+            # Mound: denser and higher in the middle; pieces lie mostly flat.
+            r = ax * math.sqrt(rnd.random())
+            a = rnd.uniform(0, 2 * math.pi)
+            top = az * max(0.0, 1 - (r / ax) ** 2)
+            p = (r * math.cos(a), ay / max(ax, 1e-6) * r * math.sin(a), top * (0.75 + 0.25 * rnd.random()))
+            rot = [rnd.uniform(-0.6, 0.6) * rj, rnd.uniform(-0.6, 0.6) * rj, rot_z]
+        elif dist == "disc":
+            r = ax * math.sqrt(rnd.random())
+            a = rnd.uniform(0, 2 * math.pi)
+            p = (r * math.cos(a), ay / max(ax, 1e-6) * r * math.sin(a), rnd.uniform(-az, az) * 0.1)
+        elif dist == "ring":
+            a = 2 * math.pi * i / n + rnd.uniform(-0.5, 0.5) * rj * (2 * math.pi / n)
+            p = (ax * math.cos(a), ay * math.sin(a), rnd.uniform(-az, az) * 0.2)
+            rot = [rot[0] * 0.2, rot[1] * 0.2, a + math.pi / 2]
+        else:  # grid: rows along X, columns along Y, evenly filling the box
+            c, rr = i % cols, i // cols
+            p = (-ax + (2 * ax) * (c + 0.5) / cols, -ay + (2 * ay) * (rr + 0.5) / rows, 0.0)
+            rot = [rot[0] * 0.1, rot[1] * 0.1, rot[2] * 0.1]
+        s = sc["size"] * (1 + rnd.uniform(-1, 1) * sc["sizeJitter"])
+        pts.append(p)
+        rots.append(rot)
+        scales.append(max(1e-4, s))
+    return pts, rots, scales
+
+
+def add_scatter(spec, job):
+    """Instances of a source mesh on seeded points (geometry nodes: scales to thousands)."""
+    sc = spec["scatter"]
+    if sc.get("modelAssetId"):
+        src_root, imported = add_model({"name": spec["name"] + " source", "model": {"assetId": sc["modelAssetId"]}}, job)
+        # Join the model into one mesh object so it can be instanced.
+        meshes = [o for o in imported if o.type == "MESH"]
+        if not meshes:
+            raise RuntimeError(f"scatter model for {spec['name']} has no mesh")
+        deps = bpy.context.evaluated_depsgraph_get()
+        import bmesh
+
+        bm = bmesh.new()
+        for o in meshes:
+            tmp = bpy.data.meshes.new_from_object(o.evaluated_get(deps))
+            tmp.transform(o.matrix_world)
+            bm.from_mesh(tmp)
+            bpy.data.meshes.remove(tmp)
+        joined = bpy.data.meshes.new(spec["name"] + " source mesh")
+        bm.to_mesh(joined)
+        bm.free()
+        source = link(bpy.data.objects.new(spec["name"] + " source", joined))
+        # Normalise to a unit-size piece; `size` then scales it.
+        dims = max(source.dimensions) or 1.0
+        joined.transform(__import__("mathutils").Matrix.Scale(1.0 / dims, 4))
+        for o in [src_root] + imported:
+            o.hide_render = True
+    else:
+        source = add_primitive({"mesh": {"primitive": sc["primitive"], "size": 1.0, "smooth": True}, "name": spec["name"] + " source"})
+        source.name = spec["name"] + " source"
+    source.hide_render = True
+    source.hide_viewport = True
+
+    pts, rots, scales = scatter_layout(sc)
+    mesh = bpy.data.meshes.new(spec["name"] + " points")
+    mesh.from_pydata(pts, [], [])
+    rot_attr = mesh.attributes.new("mg_rot", "FLOAT_VECTOR", "POINT")
+    scl_attr = mesh.attributes.new("mg_scale", "FLOAT", "POINT")
+    for i, (r, s) in enumerate(zip(rots, scales)):
+        rot_attr.data[i].vector = r
+        scl_attr.data[i].value = s
+    obj = link(bpy.data.objects.new(spec["name"], mesh))
+
+    tree = bpy.data.node_groups.new(spec["name"] + " scatter", "GeometryNodeTree")
+    tree.interface.new_socket("Geometry", in_out="INPUT", socket_type="NodeSocketGeometry")
+    tree.interface.new_socket("Geometry", in_out="OUTPUT", socket_type="NodeSocketGeometry")
+    n = tree.nodes
+    gi = n.new("NodeGroupInput")
+    go = n.new("NodeGroupOutput")
+    inst = n.new("GeometryNodeInstanceOnPoints")
+    info = n.new("GeometryNodeObjectInfo")
+    info.inputs["Object"].default_value = source
+    if "As Instance" in info.inputs:
+        info.inputs["As Instance"].default_value = False
+    rot = n.new("GeometryNodeInputNamedAttribute")
+    rot.data_type = "FLOAT_VECTOR"
+    rot.inputs["Name"].default_value = "mg_rot"
+    scl = n.new("GeometryNodeInputNamedAttribute")
+    scl.data_type = "FLOAT"
+    scl.inputs["Name"].default_value = "mg_scale"
+    l = tree.links
+    l.new(gi.outputs[0], inst.inputs["Points"])
+    l.new(info.outputs["Geometry"], inst.inputs["Instance"])
+    rot_out = rot.outputs.get("Attribute") or rot.outputs[0]
+    scl_out = scl.outputs.get("Attribute") or scl.outputs[0]
+    if inst.inputs["Rotation"].type == "ROTATION":
+        e2r = n.new("FunctionNodeEulerToRotation")
+        l.new(rot_out, e2r.inputs[0])
+        l.new(e2r.outputs[0], inst.inputs["Rotation"])
+    else:
+        l.new(rot_out, inst.inputs["Rotation"])
+    l.new(scl_out, inst.inputs["Scale"])
+    l.new(inst.outputs["Instances"], go.inputs[0])
+    mod = obj.modifiers.new("Scatter", "NODES")
+    mod.node_group = tree
+    return obj, source
+
+
+def add_path(obj, spec):
+    """Smooth spline through the path points; the object follows it by pathProgress (0..1)."""
+    p = spec["path"]
+    cu = bpy.data.curves.new(spec["name"] + " path", "CURVE")
+    cu.dimensions = "3D"
+    cu.use_path = True
+    sp = cu.splines.new("BEZIER")
+    sp.bezier_points.add(len(p["points"]) - 1)
+    for bp, co in zip(sp.bezier_points, p["points"]):
+        bp.co = co
+        bp.handle_left_type = "AUTO"
+        bp.handle_right_type = "AUTO"
+    sp.use_cyclic_u = bool(p["closed"])
+    path_obj = link(bpy.data.objects.new(spec["name"] + " path", cu))
+    path_obj.hide_render = True
+    con = obj.constraints.new("FOLLOW_PATH")
+    con.name = "Follow Path"
+    con.target = path_obj
+    con.use_fixed_location = True
+    con.use_curve_follow = bool(p["followTangent"])
+    if obj.type == "CAMERA":
+        con.forward_axis = "TRACK_NEGATIVE_Z"
+        con.up_axis = "UP_Y"
+    con.offset_factor = 0.0
+    return con
+
+
+def add_shake(obj, cam, fps, seed):
+    """Handheld camera shake: smooth noise on rotation (or on location when the camera tracks a target)."""
+    amount = math.radians(cam["shake"])
+    scale_frames = max(1.0, fps / max(0.1, cam["shakeHz"]))
+    tracking = bool(cam.get("trackTargetId"))
+    path = "location" if tracking else "rotation_euler"
+    strength = (math.tan(amount) * max(0.5, cam["focusDistance"]) if tracking else amount) * 2
+    have = {fc.data_path for fc in fcurves_of(obj)}
+    if path not in have:
+        obj.keyframe_insert(data_path=path, frame=1)
+    for fc in fcurves_of(obj):
+        if fc.data_path != path:
+            continue
+        mod = fc.modifiers.new("NOISE")
+        mod.scale = scale_frames
+        mod.strength = strength * (0.6 if fc.array_index == 2 else 1.0)
+        mod.phase = (seed * 37 + fc.array_index * 101) % 1000
+        mod.blend_type = "ADD"
+
+
 def add_camera(spec):
     c = spec["camera"]
     cam = bpy.data.cameras.new(spec["name"])
@@ -329,6 +668,9 @@ def add_light(spec):
         light.size = max(0.01, l["size"])
     elif l["type"] in ("point", "spot"):
         light.shadow_soft_size = l["size"]
+        if l["type"] == "spot":
+            light.spot_size = math.radians(l.get("spotSize", 45))
+            light.spot_blend = l.get("spotBlend", 0.15)
     elif l["type"] == "sun":
         light.angle = math.radians(max(0.0, min(180.0, l["size"])))
     return link(bpy.data.objects.new(spec["name"], light))
@@ -409,6 +751,11 @@ INTERP = {
     "easeIn": ("QUAD", "EASE_IN"),
     "easeOut": ("QUAD", "EASE_OUT"),
     "easeInOut": ("BEZIER", "AUTO"),
+    "expoIn": ("EXPO", "EASE_IN"),
+    "expoOut": ("EXPO", "EASE_OUT"),
+    "expoInOut": ("EXPO", "EASE_IN_OUT"),
+    "backIn": ("BACK", "EASE_IN"),
+    "backOut": ("BACK", "EASE_OUT"),
 }
 
 
@@ -445,21 +792,33 @@ def animate(obj, track):
         target, path = obj.data.dof, "focus_distance"
     elif prop == "energy":
         target, path = obj.data, "energy"
+    elif prop == "pathProgress":
+        target = obj.constraints.get("Follow Path")
+        if target is None:
+            warn(f"{obj.name}: pathProgress without a path")
+            return
+        path = "offset_factor"
     easing_by_frame = {}
     for k in track["keyframes"]:
         frame = k["frame"] + 1
         v = k["value"]
         if prop == "rotation":
             setattr(target, path, [math.radians(x) for x in v])
+        elif prop == "pathProgress":
+            setattr(target, path, min(1.0, max(0.0, v[0])))
         elif len(v) == 3:
             setattr(target, path, v)
         else:
             setattr(target, path, v[0])
         target.keyframe_insert(data_path=path, frame=frame)
         easing_by_frame[frame] = INTERP.get(k.get("easing", "easeInOut"), INTERP["easeInOut"])
-    # Camera/light data properties keep their animation on the data block.
-    owner = obj if target is obj else obj.data
+    # Camera/light data properties keep their animation on the data block;
+    # constraint properties live on the object's action.
+    owner = obj.data if target is obj.data else obj
+    full_path = target.path_from_id(path) if prop == "pathProgress" else path
     for fc in fcurves_of(owner):
+        if fc.data_path != full_path:
+            continue  # only this track's curves (others may share keyframe frames)
         for kp in fc.keyframe_points:
             interp = easing_by_frame.get(int(round(kp.co.x)))
             if interp:
@@ -504,19 +863,32 @@ def build(job):
             obj, extra = add_model(o, job)
         elif kind == "particles":
             obj = add_particles(o)
+        elif kind == "media":
+            obj = add_media(o, job)
+        elif kind == "scatter":
+            obj, source = add_scatter(o, job)
+            extra = [source]
         else:
             warn(f"unknown object kind {kind}")
             continue
+        if o.get("material") and kind in ("mesh", "text", "model", "scatter"):
+            mat = make_material(o["name"] + " material", o["material"])
+            side = (o.get("text") or {}).get("sideMaterial")
+            if kind == "text" and side:
+                obj = text_to_two_tone_mesh(obj, mat, make_material(o["name"] + " sides", side))
+            else:
+                for target in [obj] + [e for e in extra if e.type == "MESH"]:
+                    assign(target, mat)
         obj.location = o["location"]
         obj.rotation_euler = [math.radians(a) for a in o["rotation"]]
         obj.scale = o["scale"]
         obj.hide_render = not o["visible"]
-        if o.get("material") and kind in ("mesh", "text", "model"):
-            mat = make_material(o["name"] + " material", o["material"])
-            for target in [obj] + [e for e in extra if e.type == "MESH"]:
-                assign(target, mat)
+        if o.get("path"):
+            add_path(obj, o)
         for track in o["animation"]:
             animate(obj, track)
+        if kind == "camera" and o["camera"].get("shake", 0) > 0:
+            add_shake(obj, o["camera"], fps["num"] / fps["den"], len(objects) + 1)
         objects[o["id"]] = obj
 
     for cam, o in pending_track:

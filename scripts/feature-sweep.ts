@@ -289,6 +289,7 @@ const lab = await step("lab clip for visual checks", async () => {
   await ui.tool("timeline_set_clip_properties", { clipId: c.clipId, props: { transform: { fit: "stretch" } } });
   S.lab = c.clipId;
   S.plain = (await ui.call("render.still", { frame: 430, scale: 0.25 })).path;
+  return "ready"; // (a void step result would skip every rendered-feature check below)
 });
 if (lab !== undefined) {
   for (const e of core.EFFECTS) {
@@ -370,6 +371,23 @@ await step("scene_add_object / text / camera / light / material / animate / upda
   const p = await ui.tool("scene_preview", { sceneId: id, frame: 10 });
   check(p._images === 1, "preview");
 });
+await step("scene_camera_move (orbit, snap stops) + media plane + scatter", async () => {
+  const id = S.scene_empty;
+  const cam = await ui.tool("scene_add_camera", { sceneId: id, name: "Orbit cam", location: [0, -7, 1.5], shake: 0.3 });
+  const mv = await ui.tool("scene_camera_move", { sceneId: id, cameraId: cam.objectId, move: "orbit", arc: 120, distance: 7, stops: [4, 12], stepFrames: 6, easing: "expoOut" });
+  check(mv.keyframes === 4, `progress keys ${mv.keyframes}`);
+  await ui.tool("scene_add_object", { sceneId: id, kind: "media", name: "Screen", mediaAssetId: S.image, mediaWidth: 1.5, location: [0, 1, 1.5] });
+  await ui.tool("scene_add_object", { sceneId: id, kind: "scatter", name: "Coins", primitive: "coin", scatterCount: 300, material: "gold" });
+  const p = await ui.tool("scene_preview", { sceneId: id, frame: 14 });
+  check(p._images === 1, "preview");
+  return `${mv.points} path points`;
+});
+await step("scene_bake (draft) -> video asset", async () => {
+  const sc = await ui.tool("scene_create", { name: "Bake", template: "particleBackdrop", durationFrames: 8 });
+  const b = await ui.tool("scene_bake", { sceneId: sc.sceneId, quality: "draft" });
+  check(!!b.assetId && b.duration > 0.2, "no baked asset");
+  return `${b.duration.toFixed(2)} s video`;
+});
 await step("Cycles GPU preset renders (render.scene + render.sceneCache)", async () => {
   await ui.tool("scene_set_render_settings", { sceneId: S.scene_chromeTitle, preset: "cyclesPreview", render: { samples: 8 } });
   await ui.call("render.scene", { sceneId: S.scene_chromeTitle, quality: "draft", scale: 0.2, frames: [5] });
@@ -387,6 +405,22 @@ await step("3D scene clip on the timeline renders in the exact frame", async () 
 // ------------------------------------------------------------------ preview, audio, captions, interchange
 
 section("Preview, audio, captions, interchange");
+await step("sfx_generate: riser ends on the anchor, whoosh on the SFX track", async () => {
+  const r = await ui.tool("sfx_generate", { kind: "riser", anchorFrame: 120, duration: 1 });
+  check(r.start === 90 && r.frames === 30, `riser placed at ${r.start}+${r.frames}`);
+  const w = await ui.tool("sfx_generate", { kind: "whoosh", anchorFrame: 200 });
+  check(!!w.clipId, "no whoosh clip");
+  return `riser 90-120, whoosh at ${w.start}`;
+});
+await step("look_save + look_apply (saved look)", async () => {
+  await ui.tool("effect_add", { clipId: S.lab, type: "scanlines", params: { amount: 0.4 } });
+  const l = await ui.tool("look_save", { clipId: S.lab, label: "Sweep look" });
+  const c = await ui.tool("timeline_add_clip", { trackId: tid("V2"), type: "color", start: 900, duration: 10, fill: "#808080" });
+  await ui.tool("look_apply", { clipIds: [c.clipId], look: l.lookId });
+  const st = await ui.tool("project_get_state", {});
+  check(JSON.stringify(st).includes("scanlines"), "saved look not applied");
+  return l.lookId;
+});
 await step("preview_render returns real frames as images", async () => {
   const p = await ui.tool("preview_render", { frames: [10, 170, 430], scale: 0.3 });
   check(p._images === 3, "images");

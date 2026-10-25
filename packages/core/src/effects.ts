@@ -25,6 +25,28 @@ export interface EffectSpec {
 export const MOTION_EFFECTS = new Set(["shake", "beatPulse"]);
 /** Frame overlays drawn on the composite after the layer (not in the layer's filter chain). */
 export const FRAME_EFFECTS = new Set(["letterbox", "mask"]);
+/** Geometric effects: run after the colour effects, on colour and alpha together. */
+export const GEOMETRY_EFFECTS = new Set(["lensDistortion"]);
+
+/**
+ * Lens distortion coefficients for an amount (-1..1), FFmpeg `lenscorrection`
+ * convention: a pixel at normalised radius r (r² = 1 in the corners) samples
+ * the source at r·(1 + k1·r² + k2·r⁴).
+ */
+export function lensCoefficients(amount: number): { k1: number; k2: number } {
+  return { k1: amount * 0.5, k2: amount * 0.08 };
+}
+
+/** Source position (pixels) sampled for output pixel (x, y) of a W×H frame under lens distortion. */
+export function lensSource(x: number, y: number, W: number, H: number, k: { k1: number; k2: number }): [number, number] {
+  const cx = W / 2;
+  const cy = H / 2;
+  const dx = x - cx;
+  const dy = y - cy;
+  const r2 = (dx * dx + dy * dy) / ((W * W + H * H) / 4);
+  const m = 1 + k.k1 * r2 + k.k2 * r2 * r2;
+  return [cx + dx * m, cy + dy * m];
+}
 
 /** Height of each letterbox bar as a fraction of the frame height (0 when the frame is already wider). */
 export function letterboxBar(ratio: string, width: number, height: number): number {
@@ -211,6 +233,27 @@ export const EFFECTS: EffectSpec[] = [
     ],
   },
   {
+    type: "scanlines",
+    label: "Scanlines",
+    category: "stylize",
+    description: "Dark horizontal lines like a CRT or arcade monitor. Spacing is in project pixels.",
+    params: [
+      { key: "amount", label: "Darkness", kind: "number", min: 0, max: 1, step: 0.01, default: 0.25 },
+      { key: "spacing", label: "Spacing", kind: "number", min: 2, max: 16, step: 1, default: 4, unit: "px" },
+    ],
+  },
+  {
+    type: "lensDistortion",
+    label: "Lens / CRT Distortion",
+    category: "stylize",
+    description:
+      "Barrel distortion like a curved CRT screen or a wide lens (positive), or pincushion (negative). The picture bulges and the frame edges round off. Applied after the other effects of the clip, so scanlines and grain bend with it. On an adjustment layer it finishes the whole frame.",
+    params: [
+      { key: "amount", label: "Amount", kind: "number", min: -1, max: 1, step: 0.01, default: 0.25 },
+      { key: "edges", label: "Outside the picture", kind: "enum", options: ["black", "transparent"], default: "black" },
+    ],
+  },
+  {
     type: "shake",
     label: "Camera Shake",
     category: "motion",
@@ -291,6 +334,8 @@ export interface TransitionSpec {
   description: string;
   /** Whether the outgoing clip must remain visible during the transition. */
   needsOutgoing: boolean;
+  /** The outgoing clip animates too (moves, blurs, glitches), not just the incoming one. */
+  twoSided?: boolean;
 }
 
 export const TRANSITIONS: TransitionSpec[] = [
@@ -307,16 +352,34 @@ export const TRANSITIONS: TransitionSpec[] = [
   { type: "wipeUp", label: "Wipe Up", description: "Soft edge sweeps bottom to top revealing the incoming shot.", needsOutgoing: true },
   { type: "wipeDown", label: "Wipe Down", description: "Soft edge sweeps top to bottom revealing the incoming shot.", needsOutgoing: true },
   { type: "iris", label: "Iris Open", description: "Circle grows from the centre revealing the incoming shot.", needsOutgoing: true },
+  { type: "whipLeft", label: "Whip Pan Left", description: "Both shots fly left together with motion blur, like a fast camera pan.", needsOutgoing: true, twoSided: true },
+  { type: "whipRight", label: "Whip Pan Right", description: "Both shots fly right together with motion blur.", needsOutgoing: true, twoSided: true },
+  { type: "whipUp", label: "Whip Pan Up", description: "Both shots fly up together with motion blur (whip tilt).", needsOutgoing: true, twoSided: true },
+  { type: "whipDown", label: "Whip Pan Down", description: "Both shots fly down together with motion blur.", needsOutgoing: true, twoSided: true },
+  {
+    type: "zoomThrough",
+    label: "Zoom Through",
+    description: "Punch into the outgoing shot with motion blur, cut at the peak, and land on the incoming shot as it settles back. Great on a drop.",
+    needsOutgoing: true,
+    twoSided: true,
+  },
+  { type: "glitchCut", label: "Glitch Cut", description: "Hard cut in the middle wrapped in RGB-split and jitter bursts on both shots.", needsOutgoing: true, twoSided: true },
 ];
+
+/** Peak scale of the zoom-through transition. */
+export const ZOOM_THROUGH_SCALE = 2.2;
 
 export const TRANSITION_TYPES = TRANSITIONS.map((t) => t.type);
 
 // ---------------------------------------------------------------------------
 // Text animations (curves in core/animation.ts; typewriter reveals characters, see textReveal).
 
-export const TEXT_ANIMATIONS = ["none", "fade", "slideUp", "slideDown", "slideLeft", "slideRight", "pop", "typewriter", "words"] as const;
-/** Animations that reveal text progressively (characters or whole words) instead of fading. */
-export const REVEAL_ANIMATIONS: ReadonlySet<string> = new Set(["typewriter", "words"]);
+export const TEXT_ANIMATIONS = ["none", "fade", "slideUp", "slideDown", "slideLeft", "slideRight", "pop", "typewriter", "words", "scramble"] as const;
+/**
+ * Animations that change the drawn text per frame (characters, whole words, or
+ * decoding from random glyphs) instead of fading. See `textLinesAt`.
+ */
+export const REVEAL_ANIMATIONS: ReadonlySet<string> = new Set(["typewriter", "words", "scramble"]);
 export type TextAnimation = (typeof TEXT_ANIMATIONS)[number];
 
 // ---------------------------------------------------------------------------
@@ -385,6 +448,19 @@ export const LOOKS: LookSpec[] = [
     ],
   },
   {
+    id: "crtMonitor",
+    label: "CRT Monitor",
+    description: "Curved arcade/CRT screen: barrel distortion, scanlines, soft vignette, fine grain and colour fringing. Best on an adjustment layer above everything.",
+    effects: [
+      { type: "basicColor", params: { contrast: 1.08, saturation: 1.1 } },
+      { type: "scanlines", params: { amount: 0.18, spacing: 4 } },
+      { type: "chromaticAberration", params: { pixels: 2 } },
+      { type: "grain", params: { amount: 8 } },
+      { type: "vignette", params: { amount: 0.45 } },
+      { type: "lensDistortion", params: { amount: 0.22, edges: "black" } },
+    ],
+  },
+  {
     id: "bleachBypass",
     label: "Bleach Bypass",
     description: "Desaturated, metallic, high contrast.",
@@ -395,8 +471,8 @@ export const LOOKS: LookSpec[] = [
   },
 ];
 
-export function lookSpec(id: string): LookSpec | undefined {
-  return LOOKS.find((l) => l.id === id);
+export function lookSpec(id: string, saved: readonly LookSpec[] = []): LookSpec | undefined {
+  return LOOKS.find((l) => l.id === id) ?? saved.find((l) => l.id === id);
 }
 
 /** Line height (× font size) for 2D text, shared by export and live preview. */

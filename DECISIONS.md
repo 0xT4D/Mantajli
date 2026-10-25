@@ -134,3 +134,51 @@ and MCP bridge (`tools.call` + RPC), and judges rendered features by pixel diffe
 reference frame rather than by inspecting graph strings. The promo is built by a script that uses
 only the app's tools, so it doubles as an end-to-end test of a real production; anything that
 needed a workaround there was fixed in the app instead.
+
+
+## D20 — Reference videos are the quality benchmark (2026-10-24)
+`example_videos/` holds three reference teasers; `REFERENCE_VIDEO_ANALYSIS.md` records what makes
+them work (transitions on musical drops, snap-and-settle moves, decode typography, one whole-frame
+CRT/lens finish, dense instanced detail) and the prioritised gaps. Session-4 features were chosen
+from that analysis, and the benchmark montage (`scripts/benchmark/`) is rebuilt from the app's own
+tools to compare against them.
+
+## D21 — Adjustment layers composite in three segments
+An adjustment clip's source is the composite below it. A time-shifted `split` branch would make
+FFmpeg queue every frame before the layer starts (overlay waits for the branch's first frame), so
+the running base is split into before / during / after with `trim`, only the middle runs through
+the normal layer chain (effects, opacity, masks, blend, motion) and is overlaid on the untouched
+middle, and `concat` rejoins the three (timestamps re-based per segment; verified continuous).
+Geometric effects (lens distortion) run after colour effects, on RGBA, so alpha bends with colour.
+
+## D22 — Two-sided transitions derive their blur from their own motion
+The plan gives the outgoing layer the next clip's transition (`transitionOut`); `layerCurves`
+animates its tail and `transitionFx` returns per-frame motion blur computed from the curve's
+velocity (180° shutter) and the glitch-cut RGB split, for both export and preview. FFmpeg: a pair of
+opposite `dblur` streaks (dblur alone is one-sided and shifts the image), blurred premultiplied
+(`premultiply` → blur → `unpremultiply`) so transparent margins do not darken edges, after padding
+the layer along the blur axis — the incoming shot with a transparent margin, the outgoing one with
+smeared edge pixels, so the background never shows through the seam.
+
+## D23 — 3D camera paths, instancing, media planes, bakes
+Paths are Blender bezier curves with auto handles through the points, followed with a Follow Path
+constraint whose `offset_factor` is the keyframed `pathProgress` (easing per key; "hold" keys give
+snap-and-settle steps). Cameras keep a Track To target, so moves stay framed without tangent
+rotation. Scatter = one points mesh with per-point rotation/scale attributes + a geometry-nodes
+Instance on Points modifier (thousands of instances cheaply). Media planes are emissive (screens)
+or lit (prints); portal templates compute the camera distance at which the screen fills the frame
+exactly like a fill-fit clip (`fillDistance`). `scene_bake` renders a scene to an H.264 asset so a
+scene can play on a screen inside another scene.
+
+## D24 — Cache keys carry the renderer version
+Composition previews are keyed by plan content plus `RENDERER_VERSION` (bump it whenever the same
+plan renders different pixels); 3D frame caches include a hash of `mantagli_scene.py`. Without this
+an app update that fixes a renderer would keep serving stale cached frames.
+
+## D25 — Music structure and sound design are suggestions, made locally
+Sections come from novelty of loudness (power-averaged), brightness and onset density over 3 s on
+each side, refined to the sharpest 0.5 s step and snapped to a beat; a boundary after a riser is a
+drop even on a loudness-flat master. They become labelled section markers only — never automatic
+edits. Sound effects are synthesized procedurally (seeded, deterministic, original material) into
+`generated/sfx`, and placed by the effect's own anchor (risers end on the frame, whooshes peak on
+it, hits start on it).

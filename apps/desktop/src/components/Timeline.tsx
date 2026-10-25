@@ -5,10 +5,12 @@ import {
   Eye,
   EyeOff,
   Film,
+  Layers,
   Lock,
   Magnet,
   Plus,
   Scissors,
+  Square,
   Sparkles,
   Trash2,
   Type,
@@ -28,7 +30,7 @@ import { cx, IconButton } from "./ui";
 const HEADER_W = 168;
 const RULER_H = 26;
 const TRACK_H: Record<Track["kind"], number> = { video: 58, scene: 50, text: 36, audio: 50 };
-const CLIP_COLORS: Record<string, string> = { media: "var(--color-clip-video)", text: "var(--color-clip-text)", scene: "var(--color-clip-scene)", color: "var(--color-clip-color)", audio: "var(--color-clip-audio)" };
+const CLIP_COLORS: Record<string, string> = { media: "var(--color-clip-video)", text: "var(--color-clip-text)", scene: "var(--color-clip-scene)", color: "var(--color-clip-color)", adjustment: "var(--color-clip-adjustment)", audio: "var(--color-clip-audio)" };
 
 
 const waveformCache = new Map<string, Promise<{ peaksPerSecond: number; peaks: number[] } | null>>();
@@ -258,6 +260,7 @@ function TimelineInner({ project }: { project: Project }) {
         <input type="range" className="w-24" min={-3} max={3.6} step={0.01} value={Math.log(zoom)} onChange={(e) => setZoom(Math.exp(Number(e.target.value)))} title="Timeline zoom" />
         <IconButton icon={<ZoomIn size={14} />} label="Zoom in" shortcut="+" onClick={() => setZoom(zoom * 1.4)} />
         <div className="mx-1 h-4 w-px bg-line" />
+        <InsertMenu project={project} />
         <AddTrackMenu onAdd={addTrack} />
       </div>
 
@@ -334,6 +337,7 @@ function TimelineInner({ project }: { project: Project }) {
                       m.kind === "downbeat" ? "border-b-warn" : m.kind === "beat" ? "border-b-warn/50" : m.kind === "onset" ? "border-b-err/60" : "border-b-accent-2",
                     )}
                   />
+                  {m.kind === "section" && m.label && <div className="pointer-events-none absolute bottom-2 left-2 rounded bg-accent-2/20 px-0.5 text-[8px] font-semibold uppercase whitespace-nowrap text-accent-2">{m.label}</div>}
                 </div>
               ))}
             </div>
@@ -402,13 +406,90 @@ function findClipIn(p: Project, id: string): { clip: Clip; track: Track } | unde
   return undefined;
 }
 
+/**
+ * Insert a title, colour solid or adjustment layer at the playhead (3 s). Uses
+ * the first track of the right kind, adding one when the project has none;
+ * adjustment layers go on a top "Adjust" track so they affect everything below.
+ */
+function InsertMenu({ project }: { project: Project }) {
+  const { playhead, dispatch, setSelection, call } = useStudio();
+  const [open, setOpen] = useState(false);
+  const fps = fpsValue(project.settings.fps);
+  const duration = Math.round(fps * 3);
+  const insert = async (what: "title" | "color" | "adjustment") => {
+    setOpen(false);
+    const want = what === "title" ? (t: Track) => t.kind === "text" : what === "color" ? (t: Track) => t.kind === "video" : (t: Track) => t.kind === "video" && t.name === "Adjust";
+    let trackId = project.tracks.find(want)?.id;
+    try {
+      if (!trackId) {
+        const r = (await dispatch("track.add", what === "title" ? { kind: "text" } : what === "color" ? { kind: "video" } : { kind: "video", name: "Adjust", index: 0 }, "Add track")) as { trackId: string };
+        trackId = r.trackId;
+      }
+      const clip =
+        what === "title" ? { type: "text" as const, text: "TITLE", start: playhead, duration, animation: { in: "scramble" as const, out: "fade" as const, duration: 12 } }
+        : what === "color" ? { type: "color" as const, fill: "#101018", start: playhead, duration }
+        : { type: "adjustment" as const, start: playhead, duration };
+      const r = (await dispatch("clip.add", { trackId, clip }, what === "title" ? "Insert title" : what === "color" ? "Insert colour solid" : "Insert adjustment layer")) as { clipId: string };
+      setSelection({ kind: "clips", ids: [r.clipId] });
+    } catch {
+      // the store already shows a toast
+    }
+  };
+  /** Generate an original sound effect anchored at the playhead (risers end there, whooshes peak there). */
+  const sfx = async (kind: string) => {
+    setOpen(false);
+    const r = await call<{ ok: boolean; data?: { clipId: string }; error?: { message: string } }>("tools.call", { name: "sfx_generate", input: { kind, anchorFrame: playhead } }).catch(() => null);
+    if (r?.ok && r.data) setSelection({ kind: "clips", ids: [r.data.clipId] });
+    else if (r?.error) useStudio.getState().toast("error", r.error.message);
+  };
+  return (
+    <div className="relative">
+      <IconButton icon={<Layers size={14} />} label="Insert title / solid / adjustment layer / sound effect" onClick={() => setOpen(!open)} />
+      {open && (
+        <div className="absolute right-0 top-8 z-50 w-48 rounded border border-line-2 bg-raised py-1 shadow-xl" onMouseLeave={() => setOpen(false)}>
+          {(
+            [
+              ["title", "Title at playhead", <Type size={13} key="t" />],
+              ["color", "Colour solid", <Square size={13} key="c" />],
+              ["adjustment", "Adjustment layer", <Layers size={13} key="a" />],
+            ] as const
+          ).map(([k, label, icon]) => (
+            <button key={k} type="button" className="flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] hover:bg-hover" onClick={() => void insert(k)}>
+              {icon}
+              {label}
+            </button>
+          ))}
+          <div className="mx-2 my-1 border-t border-line" />
+          <div className="px-2 pb-0.5 text-[10px] text-mute">Sound effect at playhead</div>
+          {(
+            [
+              ["riser", "Riser (ends here)"],
+              ["whoosh", "Whoosh (peaks here)"],
+              ["impact", "Impact"],
+              ["hit", "Hit"],
+              ["glitch", "Glitch"],
+              ["blip", "UI blip"],
+              ["downlifter", "Downlifter"],
+            ] as const
+          ).map(([k, label]) => (
+            <button key={k} type="button" className="flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] hover:bg-hover" onClick={() => void sfx(k)}>
+              <AudioLines size={13} />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AddTrackMenu({ onAdd }: { onAdd: (k: Track["kind"]) => void }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="relative">
       <IconButton icon={<Plus size={14} />} label="Add track" onClick={() => setOpen(!open)} />
       {open && (
-        <div className="absolute right-0 bottom-8 z-40 w-36 rounded border border-line-2 bg-raised py-1 shadow-xl" onMouseLeave={() => setOpen(false)}>
+        <div className="absolute right-0 top-8 z-50 w-36 rounded border border-line-2 bg-raised py-1 shadow-xl" onMouseLeave={() => setOpen(false)}>
           {(
             [
               ["video", "Video track", <Film size={13} key="v" />],
@@ -538,6 +619,7 @@ function ClipView({
       <div className="relative flex h-4 items-center gap-1 bg-black/35 px-1 text-white/90">
         {clip.type === "scene" && <Box size={10} />}
         {clip.type === "text" && <Type size={10} />}
+        {clip.type === "adjustment" && <Layers size={10} />}
         <span className="truncate">{label}</span>
         {clip.type === "media" && clip.speed !== 1 && <span className="rounded bg-black/40 px-0.5 text-[9px]">{clip.speed}×</span>}
         {clip.effects.length > 0 && <Sparkles size={9} className="shrink-0 text-warn" />}

@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { applyCommand, buildCompositionPlan, createProject } from "@mantagli/core";
+import { applyCommand, buildCompositionPlan, createProject, EASINGS, evalCurve } from "@mantagli/core";
 import { buildGraph, curveExpr } from "../src/render/ffgraph.js";
+
+/** Evaluate an FFmpeg expression of one variable in JS (the subset the graph builder emits). */
+function ffExpr(expr: string, v: string): (x: number) => number {
+  const body = expr.replace(/\bif\(/g, "iff(");
+  return new Function(
+    v,
+    `const lt=(a,b)=>a<b?1:0, gt=(a,b)=>a>b?1:0, iff=(c,a,b)=>c?a:b, pow=Math.pow, clip=(x,a,b)=>Math.min(b,Math.max(a,x)), abs=Math.abs; return ${body};`,
+  ) as (x: number) => number;
+}
 
 function graphFor(text: string) {
   let p = createProject({ name: "G", format: "square" });
@@ -42,6 +51,15 @@ describe("FFmpeg graph builder", () => {
     const { filterPath } = await import("../src/render/ffgraph.js");
     expect(filterPath("C:\\Windows\\Fonts\\a.ttf")).toBe("'C\\:/Windows/Fonts/a.ttf'");
     expect(() => filterPath("C:\\it's.ttf")).toThrow();
+  });
+
+  it("matches core easing curves for every easing (export = live preview)", () => {
+    for (const easing of EASINGS) {
+      if (easing === "hold") continue;
+      const curve = [{ frame: 0, value: -20, easing }, { frame: 24, value: 80, easing: "linear" as const }];
+      const f = ffExpr(curveExpr(curve, "t", 24), "t");
+      for (const fr of [0, 1, 5, 11.5, 12, 18, 23, 24, 30]) expect(f(fr / 24), `${easing} @${fr}`).toBeCloseTo(evalCurve(curve, fr), 3);
+    }
   });
 
   it("builds piecewise eased expressions", () => {

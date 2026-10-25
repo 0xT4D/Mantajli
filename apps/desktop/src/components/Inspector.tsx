@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, Box, Camera, Diamond, Eye, EyeOff, Lightbulb, Plus, Shapes, Sparkle, Trash2, Type } from "lucide-react";
+import { ArrowDown, ArrowUp, Box, Camera, Coins, Diamond, Eye, EyeOff, Image as ImageIcon, Lightbulb, Plus, Route, Shapes, Sparkle, Trash2, Type } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import {
   clipPropertyAt,
@@ -14,6 +14,10 @@ import {
   BLEND_MODES,
   matchingRenderPreset,
   RENDER_PRESETS,
+  CAMERA_MOVES,
+  EASINGS,
+  SCATTER_DISTRIBUTIONS,
+  type Easing,
   type Clip,
   type CommandName,
   type KeyframeProperty,
@@ -38,7 +42,7 @@ export function Inspector() {
     case "clips": {
       const clips = selection.ids.map((id) => findClip(project, id)).filter(Boolean) as { clip: Clip; track: Track }[];
       if (clips.length === 1) {
-        title = `${clips[0]!.clip.type === "media" ? "Clip" : clips[0]!.clip.type === "text" ? "Text" : clips[0]!.clip.type === "scene" ? "3D clip" : "Colour"} · ${clips[0]!.clip.name || ""}`;
+        title = `${clips[0]!.clip.type === "media" ? "Clip" : clips[0]!.clip.type === "text" ? "Text" : clips[0]!.clip.type === "scene" ? "3D clip" : clips[0]!.clip.type === "adjustment" ? "Adjustment" : "Colour"} · ${clips[0]!.clip.name || ""}`;
         body = <ClipInspector key={clips[0]!.clip.id} project={project} clip={clips[0]!.clip} track={clips[0]!.track} />;
       } else if (clips.length > 1) body = <MultiClipInspector clips={clips.map((c) => c.clip)} />;
       else body = <Empty title="Selection no longer exists" />;
@@ -302,14 +306,31 @@ function ClipInspector({ project, clip, track }: { project: Project; clip: Clip;
             <Row label="Transition in">
               <Select
                 value={clip.transitionIn?.type ?? "none"}
-                onChange={(v) => cmd("clip.setTransition", { clipId: clip.id, transition: v === "none" ? null : { type: v, duration: Math.min(clip.duration, clip.transitionIn?.duration ?? 12) } }, "Transition")}
+                onChange={(v) => cmd("clip.setTransition", { clipId: clip.id, transition: v === "none" ? null : { ...clip.transitionIn, type: v, duration: Math.min(clip.duration, clip.transitionIn?.duration ?? 12) } }, "Transition")}
                 options={[{ value: "none", label: "Cut" }, ...TRANSITIONS.map((t) => ({ value: t.type, label: t.label }))]}
               />
             </Row>
             {clip.transitionIn && (
-              <Row label="Length">
-                <NumberField value={clip.transitionIn.duration} min={1} max={clip.duration} step={1} unit="f" onChange={(v) => cmd("clip.setTransition", { clipId: clip.id, transition: { type: clip.transitionIn!.type, duration: v } }, "Transition length")} />
-              </Row>
+              <>
+                <Row label="Length">
+                  <NumberField value={clip.transitionIn.duration} min={1} max={clip.duration} step={1} unit="f" onChange={(v) => cmd("clip.setTransition", { clipId: clip.id, transition: { ...clip.transitionIn!, duration: v } }, "Transition length")} />
+                </Row>
+                <Row label="Easing" title="Progress curve of the transition (default: the transition's own)">
+                  <Select
+                    value={clip.transitionIn.easing ?? "default"}
+                    onChange={(v) => {
+                      const { easing: _e, ...rest } = clip.transitionIn!;
+                      cmd("clip.setTransition", { clipId: clip.id, transition: v === "default" ? rest : { ...rest, easing: v as Easing } }, "Transition easing");
+                    }}
+                    options={[{ value: "default", label: "Default" }, ...EASINGS.filter((e) => e !== "hold").map((e) => ({ value: e, label: e }))]}
+                  />
+                </Row>
+                {TRANSITIONS.find((t) => t.type === clip.transitionIn!.type)?.twoSided && (
+                  <Row label="Intensity" title="Strength of motion blur, zoom and glitch (1 = default)">
+                    <Slider value={clip.transitionIn.intensity ?? 1} min={0} max={2} step={0.05} onChange={(v) => cmd("clip.setTransition", { clipId: clip.id, transition: { ...clip.transitionIn!, intensity: v } }, "Transition intensity")} />
+                  </Row>
+                )}
+              </>
             )}
           </>
         )}
@@ -678,8 +699,9 @@ function SceneInspector({ project, scene, objectId }: { project: Project; scene:
       setRendering(false);
     }
   };
+  const screens = project.assets.filter((a) => (a.kind === "image" || a.kind === "video") && a.status === "ok");
   const addObject = (kind: SceneObject["kind"]) => {
-    const base = { name: kind === "light" ? "Light" : kind === "camera" ? "Camera" : kind === "text" ? "Text" : kind === "particles" ? "Particles" : "Cube" };
+    const base = { name: kind === "light" ? "Light" : kind === "camera" ? "Camera" : kind === "text" ? "Text" : kind === "particles" ? "Particles" : kind === "media" ? "Screen" : kind === "scatter" ? "Scatter" : "Cube" };
     const object =
       kind === "text"
         ? { ...base, kind, rotation: [90, 0, 0], text: { body: "TEXT", size: 1, extrude: 0.15, bevel: 0.02, align: "center", letterSpacing: 1 }, material: { preset: "chrome", baseColor: "#e8e8f0", metallic: 1, roughness: 0.1, emissionColor: "#000000", emissionStrength: 0, transmission: 0 } }
@@ -687,7 +709,11 @@ function SceneInspector({ project, scene, objectId }: { project: Project; scene:
           ? { ...base, kind, location: [0, -10, 1], rotation: [85, 0, 0] }
           : kind === "light"
             ? { ...base, kind, location: [3, -3, 4], rotation: [45, 0, 45] }
-            : { ...base, kind, ...(kind === "mesh" ? { material: { preset: "custom", baseColor: "#cccccc", metallic: 0, roughness: 0.4, emissionColor: "#000000", emissionStrength: 0, transmission: 0 } } : {}) };
+            : kind === "media"
+              ? { ...base, kind, location: [0, 0, 1], media: { assetId: screens[0]?.id ?? "", width: 2, emission: 1 } }
+              : kind === "scatter"
+                ? { ...base, kind, scatter: { primitive: "coin", distribution: "pile", count: 400, area: [1.5, 1.5, 0.7], size: 0.17 }, material: { preset: "gold", baseColor: "#ffc356", metallic: 1, roughness: 0.25 } }
+                : { ...base, kind, ...(kind === "mesh" ? { material: { preset: "custom", baseColor: "#cccccc", metallic: 0, roughness: 0.4, emissionColor: "#000000", emissionStrength: 0, transmission: 0 } } : {}) };
     void useStudio
       .getState()
       .dispatch("scene.addObject", { sceneId: scene.id, object: object as never }, `Add ${kind}`)
@@ -727,6 +753,8 @@ function SceneInspector({ project, scene, objectId }: { project: Project; scene:
         <IconButton size={20} icon={<Lightbulb size={11} />} label="Add light" onClick={() => addObject("light")} />
         <IconButton size={20} icon={<Camera size={11} />} label="Add camera" onClick={() => addObject("camera")} />
         <IconButton size={20} icon={<Sparkle size={11} />} label="Add particles" onClick={() => addObject("particles")} />
+        <IconButton size={20} icon={<Coins size={11} />} label="Add scatter (instanced pile, ring, grid…)" onClick={() => addObject("scatter")} />
+        <IconButton size={20} icon={<ImageIcon size={11} />} label={screens.length ? "Add image/video plane (screen, logo, portal)" : "Import an image or video first to add a media plane"} disabled={!screens.length} onClick={() => addObject("media")} />
       </div>}>
         <div className="max-h-48 overflow-auto rounded border border-line">
           {scene.objects.map((o) => (
@@ -735,7 +763,9 @@ function SceneInspector({ project, scene, objectId }: { project: Project; scene:
               onClick={() => setSelection({ kind: "sceneObject", sceneId: scene.id, id: o.id })}
               className={cx("flex h-6 cursor-pointer items-center gap-1.5 px-1.5 text-[11px]", o.id === objectId ? "bg-accent/15 text-fg" : "text-dim hover:bg-hover")}
             >
-              <span className="text-mute">{o.kind === "camera" ? <Camera size={11} /> : o.kind === "light" ? <Lightbulb size={11} /> : o.kind === "text" ? <Type size={11} /> : o.kind === "particles" ? <Sparkle size={11} /> : <Shapes size={11} />}</span>
+              <span className="text-mute">
+                {o.kind === "camera" ? <Camera size={11} /> : o.kind === "light" ? <Lightbulb size={11} /> : o.kind === "text" ? <Type size={11} /> : o.kind === "particles" ? <Sparkle size={11} /> : o.kind === "media" ? <ImageIcon size={11} /> : o.kind === "scatter" ? <Coins size={11} /> : <Shapes size={11} />}
+              </span>
               <span className="flex-1 truncate">{o.name}</span>
               {o.animation.length > 0 && <Diamond size={9} className="text-warn" />}
               {o.id === scene.activeCameraId && <span className="text-[9px] text-accent-2">active</span>}
@@ -743,7 +773,7 @@ function SceneInspector({ project, scene, objectId }: { project: Project; scene:
           ))}
         </div>
       </Section>
-      {obj && <SceneObjectInspector scene={scene} obj={obj} />}
+      {obj && <SceneObjectInspector project={project} scene={scene} obj={obj} />}
       <Section title="Render" defaultOpen={!obj}>
         <Row label="Quality" title={RENDER_PRESETS.find((r) => r.id === matchingRenderPreset(scene.render))?.description ?? "Custom settings"}>
           <Select
@@ -808,17 +838,72 @@ function SceneInspector({ project, scene, objectId }: { project: Project; scene:
   );
 }
 
-function SceneObjectInspector({ scene, obj }: { scene: Scene; obj: SceneObject }) {
+/** Preset camera moves along a spline (core `scene.cameraMove`), optionally snapping on downbeats. */
+function CameraMoveSection({ project, scene, obj }: { project: Project; scene: Scene; obj: SceneObject }) {
+  const cmd = useCmd();
+  const playhead = useStudio((s) => s.playhead);
+  const targets = scene.objects.filter((o) => o.id !== obj.id && o.kind !== "camera" && o.kind !== "light");
+  const [move, setMove] = useState<(typeof CAMERA_MOVES)[number]>("orbit");
+  const [target, setTarget] = useState(obj.camera?.trackTargetId ?? targets[0]?.id ?? "");
+  const [distance, setDistance] = useState(8);
+  const [height, setHeight] = useState(1.5);
+  const [arc, setArc] = useState(90);
+  const [easing, setEasing] = useState<Easing>("easeInOut");
+  const [snap, setSnap] = useState(false);
+  const progress = obj.animation.find((a) => a.property === "pathProgress");
+  const apply = () => {
+    // Snap stops: downbeats inside the scene, counted from the playhead (where the scene sits on the timeline).
+    const stops = snap ? project.markers.filter((m) => m.kind === "downbeat").map((m) => m.frame - playhead).filter((f) => f >= 0 && f < scene.durationFrames - 4) : undefined;
+    cmd(
+      "scene.cameraMove",
+      { sceneId: scene.id, cameraId: obj.id, move, ...(target ? { targetId: target } : {}), distance, height, easing: snap ? "expoOut" : easing, ...(move === "orbit" ? { arc } : {}), ...(stops?.length ? { stops, stepFrames: 14 } : {}) },
+      `Camera ${move}`,
+    );
+  };
+  return (
+    <Section title="Camera move" defaultOpen={!!obj.path}>
+      <Row label="Move">
+        <Select value={move} onChange={(v) => setMove(v as typeof move)} options={CAMERA_MOVES.map((m) => ({ value: m, label: m }))} />
+        <Select value={target} onChange={setTarget} options={[{ value: "", label: "Look at origin" }, ...targets.map((o) => ({ value: o.id, label: o.name }))]} />
+      </Row>
+      <Row label="Dist / height">
+        <NumberField value={distance} min={0.1} step={0.5} unit="m" onChange={setDistance} />
+        <NumberField value={height} step={0.25} unit="m" onChange={setHeight} />
+      </Row>
+      {move === "orbit" && (
+        <Row label="Arc">
+          <NumberField value={arc} min={-1080} max={1080} step={15} unit="°" onChange={setArc} />
+        </Row>
+      )}
+      <Row label="Easing">
+        <Select value={easing} onChange={(v) => setEasing(v as Easing)} options={EASINGS.map((e) => ({ value: e, label: e }))} />
+        <Toggle checked={snap} onChange={setSnap} label="snap on downbeats" />
+      </Row>
+      <Button onClick={apply} disabled={obj.kind !== "camera"}>
+        <Route size={11} /> Apply move
+      </Button>
+      {obj.path && (
+        <div className="text-[10px] text-mute">
+          Path: {obj.path.points.length} points{obj.path.closed ? " (closed)" : ""} · {progress?.keyframes.length ?? 0} progress keys
+          <IconButton size={18} icon={<Trash2 size={10} />} label="Remove path" onClick={() => cmd("scene.updateObject", { sceneId: scene.id, objectId: obj.id, unset: ["path"] }, "Remove camera path")} />
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function SceneObjectInspector({ project, scene, obj }: { project: Project; scene: Scene; obj: SceneObject }) {
   const cmd = useCmd();
   const { setSelection } = useStudio();
   const [keyFrame, setKeyFrame] = useState(0);
+  const [keyEasing, setKeyEasing] = useState<Easing>("easeInOut");
   const upd = (patch: Record<string, unknown>, l: string) => cmd("scene.updateObject", { sceneId: scene.id, objectId: obj.id, patch: patch as never }, l);
   const animOf = (prop: string) => obj.animation.find((a) => a.property === prop);
   const setKey = (prop: "location" | "rotation" | "scale" | "focalLength" | "energy" | "focusDistance") => {
     const cur =
       prop === "location" ? obj.location : prop === "rotation" ? obj.rotation : prop === "scale" ? obj.scale : prop === "focalLength" ? [obj.camera?.focalLength ?? 50] : prop === "focusDistance" ? [obj.camera?.focusDistance ?? 5] : [obj.light?.energy ?? 500];
     const existing = animOf(prop)?.keyframes.filter((k) => k.frame !== keyFrame) ?? [];
-    cmd("scene.animate", { sceneId: scene.id, objectId: obj.id, property: prop, keyframes: [...existing, { frame: keyFrame, value: [...cur], easing: "easeInOut" }] }, `Key ${prop}`);
+    cmd("scene.animate", { sceneId: scene.id, objectId: obj.id, property: prop, keyframes: [...existing, { frame: keyFrame, value: [...cur], easing: keyEasing }] }, `Key ${prop}`);
   };
   const m = obj.material;
   return (
@@ -864,7 +949,11 @@ function SceneObjectInspector({ scene, obj }: { scene: Scene; obj: SceneObject }
               <NumberField value={obj.camera.focusDistance} min={0.01} step={0.1} unit="m" onChange={(v) => upd({ camera: { focusDistance: v } }, "Focus distance")} />
             </Row>
             <Row label="Look at">
-              <Select value={obj.camera.trackTargetId ?? ""} onChange={(v) => upd({ camera: { trackTargetId: v || undefined } }, "Camera target")} options={[{ value: "", label: "None (use rotation)" }, ...scene.objects.filter((o) => o.id !== obj.id && o.kind !== "camera").map((o) => ({ value: o.id, label: o.name }))]} />
+              <Select value={obj.camera.trackTargetId ?? ""} onChange={(v) => (v ? upd({ camera: { trackTargetId: v } }, "Camera target") : cmd("scene.updateObject", { sceneId: scene.id, objectId: obj.id, unset: ["camera.trackTargetId"] }, "Camera target"))} options={[{ value: "", label: "None (use rotation)" }, ...scene.objects.filter((o) => o.id !== obj.id && o.kind !== "camera").map((o) => ({ value: o.id, label: o.name }))]} />
+            </Row>
+            <Row label="Shake" title="Handheld shake: amplitude (degrees) and speed (Hz)">
+              <NumberField value={obj.camera.shake} min={0} max={10} step={0.1} unit="°" onChange={(v) => upd({ camera: { shake: v } }, "Camera shake")} />
+              <NumberField value={obj.camera.shakeHz} min={0.1} max={20} step={0.1} unit="Hz" onChange={(v) => upd({ camera: { shakeHz: v } }, "Shake speed")} />
             </Row>
             {scene.activeCameraId !== obj.id && <Button onClick={() => cmd("scene.update", { sceneId: scene.id, activeCameraId: obj.id }, "Active camera")}>Make active camera</Button>}
           </>
@@ -882,6 +971,59 @@ function SceneObjectInspector({ scene, obj }: { scene: Scene; obj: SceneObject }
             </Row>
             <Row label="Size">
               <NumberField value={obj.light.size} min={0} step={0.1} onChange={(v) => upd({ light: { size: v } }, "Light size")} />
+            </Row>
+            {obj.light.type === "spot" && (
+              <Row label="Cone / blend" title="Spot cone angle and edge softness. Add world fog for a visible light shaft.">
+                <NumberField value={obj.light.spotSize} min={1} max={180} step={1} unit="°" onChange={(v) => upd({ light: { spotSize: v } }, "Spot cone")} />
+                <NumberField value={obj.light.spotBlend} min={0} max={1} step={0.05} onChange={(v) => upd({ light: { spotBlend: v } }, "Spot blend")} />
+              </Row>
+            )}
+          </>
+        )}
+        {obj.text && (
+          <Row label="Edges" title="Two-tone type: a separate material for the extruded sides and bevel">
+            <Toggle
+              checked={!!obj.text.sideMaterial}
+              onChange={(v) => (v ? upd({ text: { sideMaterial: { preset: "gold", baseColor: "#ffc356", metallic: 1, roughness: 0.25 } } }, "Edge material") : cmd("scene.updateObject", { sceneId: scene.id, objectId: obj.id, unset: ["text.sideMaterial"] }, "Edge material"))}
+              label="gold edges"
+            />
+            {obj.text.sideMaterial && <ColorField value={obj.text.sideMaterial.baseColor} onChange={(v) => upd({ text: { sideMaterial: { ...obj.text!.sideMaterial!, preset: "custom", baseColor: v, metallic: 1 } } }, "Edge colour")} />}
+          </Row>
+        )}
+        {obj.media && (
+          <>
+            <Row label="Media">
+              <Select
+                value={obj.media.assetId}
+                onChange={(v) => upd({ media: { assetId: v } }, "Screen media")}
+                options={project.assets.filter((a) => a.kind === "image" || a.kind === "video").map((a) => ({ value: a.id, label: a.name }))}
+              />
+            </Row>
+            <Row label="Width / glow" title="Width in metres (height follows the media). Glow > 0 = emissive screen; 0 = lit like a print.">
+              <NumberField value={obj.media.width} min={0.01} step={0.1} unit="m" onChange={(v) => upd({ media: { width: v } }, "Screen width")} />
+              <NumberField value={obj.media.emission} min={0} max={50} step={0.1} onChange={(v) => upd({ media: { emission: v } }, "Screen glow")} />
+            </Row>
+            <Row label="Video in">
+              <NumberField value={obj.media.sourceIn} min={0} step={0.1} unit="s" onChange={(v) => upd({ media: { sourceIn: v } }, "Video in-point")} />
+              <Toggle checked={obj.media.loop} onChange={(v) => upd({ media: { loop: v } }, "Loop video")} label="loop" />
+            </Row>
+          </>
+        )}
+        {obj.scatter && (
+          <>
+            <Row label="Piece">
+              <Select value={obj.scatter.primitive} onChange={(v) => upd({ scatter: { primitive: v } }, "Scatter piece")} options={MESH_PRIMITIVES.map((p) => ({ value: p, label: p }))} />
+              <Select value={obj.scatter.distribution} onChange={(v) => upd({ scatter: { distribution: v } }, "Scatter layout")} options={SCATTER_DISTRIBUTIONS.map((d) => ({ value: d, label: d }))} />
+            </Row>
+            <Row label="Count / size">
+              <NumberField value={obj.scatter.count} min={1} max={20000} step={50} onChange={(v) => upd({ scatter: { count: v } }, "Scatter count")} />
+              <NumberField value={obj.scatter.size} min={0.001} step={0.01} unit="m" onChange={(v) => upd({ scatter: { size: v } }, "Piece size")} />
+            </Row>
+            <Vec3Row label="Area" value={obj.scatter.area} step={0.1} onChange={(v) => upd({ scatter: { area: v } }, "Scatter area")} />
+            <Row label="Jitter / seed" title="Size jitter (0-1), rotation jitter (0-1) and random seed">
+              <NumberField value={obj.scatter.sizeJitter} min={0} max={1} step={0.05} onChange={(v) => upd({ scatter: { sizeJitter: v } }, "Size jitter")} />
+              <NumberField value={obj.scatter.rotationJitter} min={0} max={1} step={0.05} onChange={(v) => upd({ scatter: { rotationJitter: v } }, "Rotation jitter")} />
+              <NumberField value={obj.scatter.seed} step={1} onChange={(v) => upd({ scatter: { seed: v } }, "Scatter seed")} />
             </Row>
           </>
         )}
@@ -912,7 +1054,8 @@ function SceneObjectInspector({ scene, obj }: { scene: Scene; obj: SceneObject }
           <Trash2 size={12} /> Delete object
         </Button>
       </Section>
-      {m && (obj.kind === "mesh" || obj.kind === "text" || obj.kind === "model") && (
+      {obj.camera && <CameraMoveSection project={project} scene={scene} obj={obj} />}
+      {m && (obj.kind === "mesh" || obj.kind === "text" || obj.kind === "model" || obj.kind === "scatter") && (
         <Section title="Material">
           <Row label="Preset">
             <Select value={m.preset} onChange={(v) => upd({ material: { preset: v } }, "Material preset")} options={MATERIAL_PRESETS.map((p) => ({ value: p, label: p }))} />
@@ -937,11 +1080,17 @@ function SceneObjectInspector({ scene, obj }: { scene: Scene; obj: SceneObject }
             <ColorField value={m.emissionColor} onChange={(v) => upd({ material: { emissionColor: v } }, "Emission colour")} />
             <NumberField value={m.emissionStrength} min={0} max={100} step={0.5} onChange={(v) => upd({ material: { emissionStrength: v } }, "Emission strength")} />
           </Row>
+          <Row label="Pattern" title="grid: glowing lines in the emission colour every N metres; smoke: billowing emission">
+            <Select value={m.pattern} onChange={(v) => upd({ material: { pattern: v } }, "Pattern")} options={["none", "grid", "smoke"].map((v) => ({ value: v, label: v }))} />
+            {m.pattern !== "none" && <NumberField value={m.patternScale} min={0.01} max={100} step={0.1} unit="m" onChange={(v) => upd({ material: { patternScale: v } }, "Pattern scale")} />}
+            {m.pattern === "grid" && <NumberField value={m.patternLineWidth} min={0.001} max={0.5} step={0.005} onChange={(v) => upd({ material: { patternLineWidth: v } }, "Line width")} />}
+          </Row>
         </Section>
       )}
       <Section title="Animation">
         <Row label="Key frame">
           <NumberField value={keyFrame} min={0} max={scene.durationFrames} step={1} unit="f" onChange={setKeyFrame} />
+          <Select value={keyEasing} onChange={(v) => setKeyEasing(v as Easing)} options={EASINGS.map((e) => ({ value: e, label: e }))} />
         </Row>
         <div className="text-[10px] text-mute">Sets a keyframe with the object's current values at this scene frame.</div>
         <div className="flex flex-wrap gap-1">
@@ -959,8 +1108,8 @@ function SceneObjectInspector({ scene, obj }: { scene: Scene; obj: SceneObject }
             </div>
             <div className="flex flex-wrap gap-1">
               {a.keyframes.map((k) => (
-                <span key={k.frame} className="tabular rounded bg-raised px-1 py-0.5 font-mono text-[10px]">
-                  {k.frame}f [{k.value.map((v) => Math.round(v * 100) / 100).join(", ")}]
+                <span key={k.frame} className="tabular rounded bg-raised px-1 py-0.5 font-mono text-[10px]" title={`easing ${k.easing}`}>
+                  {k.frame}f [{k.value.map((v) => Math.round(v * 100) / 100).join(", ")}] {k.easing !== "easeInOut" ? k.easing : ""}
                 </span>
               ))}
             </div>

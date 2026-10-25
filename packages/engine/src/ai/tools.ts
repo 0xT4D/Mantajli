@@ -1,10 +1,13 @@
 import os from "node:os";
 import path from "node:path";
+import { SFX_KINDS, SFX_SPECS, sfxPlacement } from "../media/sfx.js";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import {
   COMMAND_NAMES,
   EASINGS,
+  CAMERA_MOVES,
+  SCATTER_DISTRIBUTIONS,
   EFFECTS,
   EFFECT_TYPES,
   FORMAT_PRESETS,
@@ -218,6 +221,9 @@ export const TOOLS: ToolDef[] = [
           meshPrimitives: MESH_PRIMITIVES,
           clipKeyframeProperties: KEYFRAME_PROPERTIES,
           sceneAnimProperties: SCENE_ANIM_PROPERTIES,
+          easings: EASINGS,
+          cameraMoves: CAMERA_MOVES,
+          scatterDistributions: SCATTER_DISTRIBUTIONS,
           exportPresets: ["reel1080", "square1080", "landscape1080", "landscape4k", "reel4k", "master"],
           notes: [
             "Track index 0 is the top layer. Clips on one track never overlap (overwrite mode trims/splits what is underneath).",
@@ -225,6 +231,11 @@ export const TOOLS: ToolDef[] = [
             "Clip transform x/y are pixel offsets from frame centre; scale 1 = fill the frame (fit: fill|fit|stretch).",
             "3D scene frames and durations are in project frames; scene keyframes are scene-relative.",
             "Motion effects (shake, beatPulse) animate the layer; beatPulse reacts to beat/downbeat markers inside the clip (run audio_analyze first).",
+            "Adjustment clips (timeline_add_clip type=adjustment) apply their effects to everything below them: use one on a top track with look crtMonitor for a whole-frame CRT/lens finish.",
+            "Two-sided transitions (whip*, zoomThrough, glitchCut) animate both shots; zoomThrough/glitchCut cut in the middle. Put them on musical accents (downbeats, section changes).",
+            "expoOut = snap and settle (fast start, long settle); use it for moves that start on a beat. backOut overshoots slightly.",
+            "Portals: arcadePortal ends with its screen filling the frame and stageReveal starts that way; show the neighbouring clip on the screen (mediaAssetId) and butt the clips together.",
+            "Camera paths: scene_camera_move (orbit/dolly/crane/truck) or a path {points} + pathProgress keys; stops=[beat frames] gives snap moves that hold between beats.",
           ],
         },
       };
@@ -290,7 +301,7 @@ export const TOOLS: ToolDef[] = [
   tool({
     name: "audio_analyze",
     description:
-      "Detect tempo (BPM), beats, downbeats and strong transients of an audio/video asset. With applyMarkers (default), beat markers are written to the timeline where the asset is placed (or from frame 0). Detection is an estimate; markers are editable. Returns marker frames.",
+      "Detect tempo (BPM), beats, downbeats, strong transients and song structure (sections labelled intro, build, drop, breakdown, change, outro) of an audio/video asset. With applyMarkers (default), beat and section markers are written to the timeline where the asset is placed (or from frame 0). Put big transitions and reveals on drops and section changes, quieter moments on breakdowns; not every beat needs a cut. Detection is an estimate; markers are editable.",
     input: z.object({ assetId: Id, applyMarkers: z.boolean().default(true) }),
     mutates: true,
     async run(ctx, i) {
@@ -305,6 +316,7 @@ export const TOOLS: ToolDef[] = [
           beatFrames: p.markers.filter((m) => m.kind === "beat" || m.kind === "downbeat").map((m) => m.frame),
           downbeatFrames: p.markers.filter((m) => m.kind === "downbeat").map((m) => m.frame),
           onsetFrames: p.markers.filter((m) => m.kind === "onset").map((m) => m.frame),
+          sections: p.markers.filter((m) => m.kind === "section" && m.source === "analysis").map((m) => ({ frame: m.frame, label: m.label, energy: m.strength })),
         },
       };
     },
@@ -333,10 +345,10 @@ export const TOOLS: ToolDef[] = [
   tool({
     name: "timeline_add_clip",
     description:
-      "Place a clip. type=media (assetId, optional sourceIn seconds, speed, duration frames - defaults to remaining source or 3 s for images), type=text (text, duration, style incl. fontAssetId of an imported font, animation), type=scene (sceneId), type=color (fill). Optional transform {x, y (pixels from frame centre), scale, rotation, fit} and name. mode=overwrite clears what is underneath; mode=error refuses overlaps.",
+      "Place a clip. type=media (assetId, optional sourceIn seconds, speed, duration frames - defaults to remaining source or 3 s for images), type=text (text, duration, style incl. fontAssetId of an imported font, animation), type=scene (sceneId), type=color (fill), type=adjustment (duration; its effects apply to everything below it - use for whole-frame looks like crtMonitor, lens distortion, shake). Optional transform {x, y (pixels from frame centre), scale, rotation, fit} and name. mode=overwrite clears what is underneath; mode=error refuses overlaps.",
     input: z.object({
       trackId: Id,
-      type: z.enum(["media", "text", "scene", "color"]),
+      type: z.enum(["media", "text", "scene", "color", "adjustment"]),
       start: Frame,
       duration: z.number().int().positive().optional(),
       assetId: Id.optional(),
@@ -370,6 +382,9 @@ export const TOOLS: ToolDef[] = [
           break;
         case "color":
           clip = { type: "color" as const, fill: i.fill ?? "#000000", start: i.start, duration: i.duration ?? fail("invalid_params", "duration required for colour clips") };
+          break;
+        case "adjustment":
+          clip = { type: "adjustment" as const, start: i.start, duration: i.duration ?? fail("invalid_params", "duration required for adjustment layers") };
           break;
       }
       return {
@@ -422,7 +437,7 @@ export const TOOLS: ToolDef[] = [
           ids.push(r.clipId);
           if (s.transitionIn) tx.dispatch("clip.setTransition", { clipId: r.clipId, transition: { type: s.transitionIn.type, duration: Math.min(s.transitionIn.duration, r.duration) } });
           if (s.look) {
-            const look = lookSpec(s.look) ?? fail("unsupported", `Unknown look ${s.look}`);
+            const look = lookSpec(s.look, session(ctx).project.looks) ?? fail("unsupported", `Unknown look ${s.look}`);
             for (const e of look.effects) tx.dispatch("effect.add", { clipId: r.clipId, type: e.type, params: e.params });
           }
           for (const e of s.effects) tx.dispatch("effect.add", { clipId: r.clipId, type: e.type, params: e.params });
@@ -473,10 +488,19 @@ export const TOOLS: ToolDef[] = [
   tool({
     name: "timeline_add_transition",
     description: `Set the transition into a clip from the previous shot on its track (null to clear). Types: ${TRANSITION_TYPES.join(", ")}.`,
-    input: z.object({ clipId: Id, type: z.enum(TRANSITION_TYPES as [string, ...string[]]).nullable(), duration: z.number().int().min(1).max(600).default(12) }),
+    input: z.object({
+      clipId: Id,
+      type: z.enum(TRANSITION_TYPES as [string, ...string[]]).nullable(),
+      duration: z.number().int().min(1).max(600).default(12),
+      /** Override the transition's progress curve (e.g. expoInOut for a harder whip, linear for an even dissolve). */
+      easing: z.enum(EASINGS).optional(),
+      /** 0-2: strength of motion blur, zoom and glitch (1 = default). */
+      intensity: z.number().min(0).max(2).optional(),
+    }),
     mutates: true,
     async run(ctx, i) {
-      session(ctx).dispatch("clip.setTransition", { clipId: i.clipId, transition: i.type ? { type: i.type, duration: i.duration } : null }, ctx.source, label("transition"));
+      const transition = i.type ? { type: i.type, duration: i.duration, ...(i.easing ? { easing: i.easing } : {}), ...(i.intensity !== undefined ? { intensity: i.intensity } : {}) } : null;
+      session(ctx).dispatch("clip.setTransition", { clipId: i.clipId, transition }, ctx.source, label("transition"));
       return { data: { ok: true } };
     },
   }),
@@ -574,11 +598,12 @@ export const TOOLS: ToolDef[] = [
   // ------------------------------------------------------------ looks & effects
   tool({
     name: "look_apply",
-    description: `Apply a named look (stack of colour/stylize effects) to clips. Looks: ${LOOKS.map((l) => l.id).join(", ")}. replace=true removes existing effects first.`,
+    description: `Apply a named look (stack of colour/stylize effects) to clips: a built-in look (${LOOKS.map((l) => l.id).join(", ")}) or the id of a look saved in this project (see project state / look_save). replace=true removes existing effects first.`,
     input: z.object({ clipIds: z.array(Id).min(1), look: z.string(), replace: z.boolean().default(true) }),
     mutates: true,
     async run(ctx, i) {
-      const look = lookSpec(i.look) ?? fail("unsupported", `Unknown look "${i.look}". Available: ${LOOKS.map((l) => l.id).join(", ")}`);
+      const saved = session(ctx).project.looks;
+      const look = lookSpec(i.look, saved) ?? fail("unsupported", `Unknown look "${i.look}". Available: ${[...LOOKS.map((l) => l.id), ...saved.map((l) => l.id)].join(", ")}`);
       session(ctx).transaction(label(`look ${look.id}`), ctx.source, (tx) => {
         for (const clipId of i.clipIds) {
           if (i.replace) {
@@ -589,6 +614,15 @@ export const TOOLS: ToolDef[] = [
         }
       });
       return { data: { ok: true, effects: look.effects.map((e) => e.type) } };
+    },
+  }),
+  tool({
+    name: "look_save",
+    description: "Save a clip's enabled effect stack as a reusable look in this project; apply it to other clips with look_apply (look = the returned lookId).",
+    input: z.object({ clipId: Id, label: z.string().min(1).max(80), description: z.string().max(300).optional() }),
+    mutates: true,
+    async run(ctx, i) {
+      return { data: session(ctx).dispatch("look.save", i, ctx.source, label(`save look ${i.label}`)) };
     },
   }),
   tool({
@@ -636,6 +670,12 @@ export const TOOLS: ToolDef[] = [
       modelAssetId: Id.optional(),
       particles: z.boolean().optional(),
       fog: z.number().min(0).max(1).optional(),
+      /** Image/video asset for the screen of arcadePortal / stageReveal. */
+      mediaAssetId: Id.optional(),
+      /** turntableStage: number of stations (2-8). */
+      count: z.number().int().min(2).max(8).optional(),
+      /** turntableStage: frames where the camera snaps to the next station (e.g. beat markers). */
+      stops: z.array(Frame).max(64).optional(),
     }),
     mutates: true,
     async run(ctx, i) {
@@ -644,10 +684,11 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "scene_add_object",
-    description: "Add a mesh primitive, imported model (model.assetId) or particle field to a scene. Rotation in degrees; Blender axes (Z up, cameras typically look along +Y).",
+    description:
+      "Add a mesh primitive, imported model (modelAssetId), particle field, media plane (kind=media: an imported image or video on an upright plane facing -Y; mediaWidth metres; mediaEmission>0 = glowing screen, 0 = lit print) or scatter (kind=scatter: count instances of primitive/modelAssetId laid out as box|pile|disc|ring|grid within scatterArea, sized size). Rotation in degrees; Blender axes (Z up, cameras typically look along +Y).",
     input: z.object({
       sceneId: Id,
-      kind: z.enum(["mesh", "model", "particles"]),
+      kind: z.enum(["mesh", "model", "particles", "media", "scatter"]),
       name: z.string().max(80).optional(),
       primitive: z.enum(MESH_PRIMITIVES).default("cube"),
       size: z.number().positive().default(1),
@@ -657,6 +698,16 @@ export const TOOLS: ToolDef[] = [
       scale: Vec3.default([1, 1, 1]),
       particleCount: z.number().int().min(1).max(5000).optional(),
       particleColor: Hex.optional(),
+      mediaAssetId: Id.optional(),
+      mediaWidth: z.number().positive().max(1000).optional(),
+      mediaEmission: z.number().min(0).max(50).optional(),
+      mediaSourceIn: z.number().min(0).optional(),
+      scatterCount: z.number().int().min(1).max(20000).optional(),
+      scatterDistribution: z.enum(SCATTER_DISTRIBUTIONS).optional(),
+      scatterArea: Vec3.optional(),
+      scatterSeed: z.number().int().optional(),
+      material: z.enum(MATERIAL_PRESETS).optional(),
+      color: Hex.optional(),
     }),
     mutates: true,
     async run(ctx, i) {
@@ -669,6 +720,13 @@ export const TOOLS: ToolDef[] = [
         ...(i.kind === "mesh" ? { mesh: { primitive: i.primitive, size: i.size, smooth: true } } : {}),
         ...(i.kind === "model" ? { model: { assetId: i.modelAssetId ?? fail("invalid_params", "modelAssetId required") } } : {}),
         ...(i.kind === "particles" ? { particles: { count: i.particleCount ?? 400, size: 0.03, color: i.particleColor ?? "#ffffff", emission: 6, area: [6, 6, 4] as [number, number, number], drift: 0.5, seed: 1 } } : {}),
+        ...(i.kind === "media"
+          ? { media: { assetId: i.mediaAssetId ?? fail("invalid_params", "mediaAssetId required for a media plane"), width: i.mediaWidth ?? 2, emission: i.mediaEmission ?? 1, sourceIn: i.mediaSourceIn ?? 0 } }
+          : {}),
+        ...(i.kind === "scatter"
+          ? { scatter: { primitive: i.primitive === "cube" ? "coin" : i.primitive, modelAssetId: i.modelAssetId, count: i.scatterCount ?? 300, distribution: i.scatterDistribution ?? "pile", area: i.scatterArea ?? [2, 2, 1], size: i.size === 1 ? 0.2 : i.size, seed: i.scatterSeed ?? 1 } }
+          : {}),
+        ...(i.material || i.color ? { material: { preset: i.material ?? "custom", baseColor: i.color ?? "#cccccc", metallic: i.material === "gold" || i.material === "chrome" ? 1 : 0, roughness: 0.3 } } : {}),
       };
       return { data: session(ctx).dispatch("scene.addObject", { sceneId: i.sceneId, object }, ctx.source, label("3D object")) };
     },
@@ -676,7 +734,20 @@ export const TOOLS: ToolDef[] = [
   tool({
     name: "scene_add_text",
     description: "Add extruded 3D text to a scene.",
-    input: z.object({ sceneId: Id, text: z.string().min(1).max(200), size: z.number().positive().default(1), extrude: z.number().min(0).max(5).default(0.15), bevel: z.number().min(0).max(1).default(0.02), location: Vec3.default([0, 0, 0]), rotation: Vec3.default([90, 0, 0]), material: z.enum(MATERIAL_PRESETS).default("chrome"), color: Hex.default("#e8e8f0") }),
+    input: z.object({
+      sceneId: Id,
+      text: z.string().min(1).max(200),
+      size: z.number().positive().default(1),
+      extrude: z.number().min(0).max(5).default(0.15),
+      bevel: z.number().min(0).max(1).default(0.02),
+      location: Vec3.default([0, 0, 0]),
+      rotation: Vec3.default([90, 0, 0]),
+      material: z.enum(MATERIAL_PRESETS).default("chrome"),
+      color: Hex.default("#e8e8f0"),
+      /** Two-tone type: material preset and colour of the extruded sides and bevel (e.g. gold edges on a silver face). */
+      sideMaterial: z.enum(MATERIAL_PRESETS).optional(),
+      sideColor: Hex.optional(),
+    }),
     mutates: true,
     async run(ctx, i) {
       return {
@@ -689,7 +760,15 @@ export const TOOLS: ToolDef[] = [
               name: i.text.slice(0, 30),
               location: i.location,
               rotation: i.rotation,
-              text: { body: i.text, size: i.size, extrude: i.extrude, bevel: i.bevel, align: "center", letterSpacing: 1 },
+              text: {
+                body: i.text,
+                size: i.size,
+                extrude: i.extrude,
+                bevel: i.bevel,
+                align: "center",
+                letterSpacing: 1,
+                ...(i.sideMaterial || i.sideColor ? { sideMaterial: { preset: i.sideMaterial ?? "custom", baseColor: i.sideColor ?? "#ffc356", metallic: 1, roughness: 0.25 } } : {}),
+              },
               material: { preset: i.material, baseColor: i.color, metallic: 0.5, roughness: 0.3, emissionColor: "#000000", emissionStrength: 0, transmission: 0 },
             },
           },
@@ -702,12 +781,26 @@ export const TOOLS: ToolDef[] = [
   tool({
     name: "scene_add_camera",
     description: "Add a camera (optionally tracking an object, with depth of field). makeActive switches the scene's render camera.",
-    input: z.object({ sceneId: Id, name: z.string().default("Camera"), location: Vec3, rotation: Vec3.default([90, 0, 0]), focalLength: z.number().min(5).max(500).default(35), dof: z.boolean().default(false), focusDistance: z.number().positive().default(5), fStop: z.number().min(0.5).max(64).default(2.8), trackTargetId: Id.optional(), makeActive: z.boolean().default(true) }),
+    input: z.object({
+      sceneId: Id,
+      name: z.string().default("Camera"),
+      location: Vec3,
+      rotation: Vec3.default([90, 0, 0]),
+      focalLength: z.number().min(5).max(500).default(35),
+      dof: z.boolean().default(false),
+      focusDistance: z.number().positive().default(5),
+      fStop: z.number().min(0.5).max(64).default(2.8),
+      trackTargetId: Id.optional(),
+      /** Handheld shake amplitude in degrees (0 = locked off) and speed in Hz. */
+      shake: z.number().min(0).max(10).default(0),
+      shakeHz: z.number().min(0.1).max(20).default(1.2),
+      makeActive: z.boolean().default(true),
+    }),
     mutates: true,
     async run(ctx, i) {
       let id = "";
       session(ctx).transaction(label("camera"), ctx.source, (tx) => {
-        id = tx.dispatch("scene.addObject", { sceneId: i.sceneId, object: { kind: "camera", name: i.name, location: i.location, rotation: i.rotation, camera: { focalLength: i.focalLength, dof: i.dof, focusDistance: i.focusDistance, fStop: i.fStop, trackTargetId: i.trackTargetId } } }).objectId;
+        id = tx.dispatch("scene.addObject", { sceneId: i.sceneId, object: { kind: "camera", name: i.name, location: i.location, rotation: i.rotation, camera: { focalLength: i.focalLength, dof: i.dof, focusDistance: i.focusDistance, fStop: i.fStop, trackTargetId: i.trackTargetId, shake: i.shake, shakeHz: i.shakeHz } } }).objectId;
         if (i.makeActive) tx.dispatch("scene.update", { sceneId: i.sceneId, activeCameraId: id });
       });
       return { data: { objectId: id } };
@@ -715,11 +808,23 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "scene_add_light",
-    description: "Add a light (point, sun, area, spot). Energy in watts (sun: irradiance).",
-    input: z.object({ sceneId: Id, type: z.enum(["point", "sun", "area", "spot"]).default("area"), name: z.string().default("Light"), location: Vec3, rotation: Vec3.default([0, 0, 0]), color: Hex.default("#ffffff"), energy: z.number().min(0).max(1e6).default(800), size: z.number().min(0).default(2) }),
+    description: "Add a light (point, sun, area, spot). Energy in watts (sun: irradiance). Spots: spotSize cone angle (deg) and spotBlend softness; with world fog they draw visible light shafts.",
+    input: z.object({
+      sceneId: Id,
+      type: z.enum(["point", "sun", "area", "spot"]).default("area"),
+      name: z.string().default("Light"),
+      location: Vec3,
+      rotation: Vec3.default([0, 0, 0]),
+      color: Hex.default("#ffffff"),
+      energy: z.number().min(0).max(1e6).default(800),
+      size: z.number().min(0).default(2),
+      spotSize: z.number().min(1).max(180).default(45),
+      spotBlend: z.number().min(0).max(1).default(0.15),
+    }),
     mutates: true,
     async run(ctx, i) {
-      return { data: session(ctx).dispatch("scene.addObject", { sceneId: i.sceneId, object: { kind: "light", name: i.name, location: i.location, rotation: i.rotation, light: { type: i.type, color: i.color, energy: i.energy, size: i.size } } }, ctx.source, label("light")) };
+      const light = { type: i.type, color: i.color, energy: i.energy, size: i.size, spotSize: i.spotSize, spotBlend: i.spotBlend };
+      return { data: session(ctx).dispatch("scene.addObject", { sceneId: i.sceneId, object: { kind: "light", name: i.name, location: i.location, rotation: i.rotation, light } }, ctx.source, label("light")) };
     },
   }),
   tool({
@@ -734,8 +839,22 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "scene_set_material",
-    description: "Set the material of a mesh, text or model object.",
-    input: z.object({ sceneId: Id, objectId: Id, preset: z.enum(MATERIAL_PRESETS).default("custom"), baseColor: Hex.default("#cccccc"), metallic: z.number().min(0).max(1).default(0), roughness: z.number().min(0).max(1).default(0.5), emissionColor: Hex.default("#000000"), emissionStrength: z.number().min(0).max(100).default(0), transmission: z.number().min(0).max(1).default(0) }),
+    description:
+      "Set the material of a mesh, text, model or scatter object. pattern=grid draws glowing lines (emission colour/strength) every patternScale metres (neon floors); pattern=smoke billows the emission like smoke (backdrops).",
+    input: z.object({
+      sceneId: Id,
+      objectId: Id,
+      preset: z.enum(MATERIAL_PRESETS).default("custom"),
+      baseColor: Hex.default("#cccccc"),
+      metallic: z.number().min(0).max(1).default(0),
+      roughness: z.number().min(0).max(1).default(0.5),
+      emissionColor: Hex.default("#000000"),
+      emissionStrength: z.number().min(0).max(100).default(0),
+      transmission: z.number().min(0).max(1).default(0),
+      pattern: z.enum(["none", "grid", "smoke"]).default("none"),
+      patternScale: z.number().min(0.01).max(100).default(1),
+      patternLineWidth: z.number().min(0.001).max(0.5).default(0.04),
+    }),
     mutates: true,
     async run(ctx, { sceneId, objectId, ...material }) {
       session(ctx).dispatch("scene.updateObject", { sceneId, objectId, patch: { material } }, ctx.source, label("material"));
@@ -744,12 +863,48 @@ export const TOOLS: ToolDef[] = [
   }),
   tool({
     name: "scene_animate",
-    description: "Replace the keyframes of one property on a scene object. location/rotation(deg)/scale take 3 values; focalLength, focusDistance (cameras) and energy (lights) take 1. Frames are scene-relative (0 = first frame).",
+    description:
+      "Replace the keyframes of one property on a scene object. location/rotation(deg)/scale take 3 values; focalLength, focusDistance (cameras), energy (lights) and pathProgress (0..1 along the object's path) take 1. Frames are scene-relative (0 = first frame). Easing applies to the segment starting at the key.",
     input: z.object({ sceneId: Id, objectId: Id, property: z.enum(SCENE_ANIM_PROPERTIES), keyframes: z.array(z.object({ frame: Frame, value: z.array(z.number()).min(1).max(3), easing: z.enum(EASINGS).default("easeInOut") })).max(500) }),
     mutates: true,
     async run(ctx, i) {
       session(ctx).dispatch("scene.animate", i, ctx.source, label("3D animation"));
       return { data: { ok: true } };
+    },
+  }),
+  tool({
+    name: "scene_camera_move",
+    description:
+      "Give a scene camera a cinematic move along a smooth spline looking at a target object: orbit (arc degrees, 360 = full turn), dollyIn/dollyOut, craneUp/craneDown, truckLeft/truckRight. distance/height are relative to the target. Without stops it is one eased move from startFrame to endFrame; with stops (scene frames, e.g. beats) it advances in equal snap-and-settle steps of stepFrames that start on those frames and hold in between (use easing expoOut).",
+    input: z.object({
+      sceneId: Id,
+      cameraId: Id,
+      move: z.enum(CAMERA_MOVES),
+      targetId: Id.optional(),
+      distance: z.number().positive().max(1000).default(8),
+      height: z.number().min(-1000).max(1000).default(1.5),
+      startFrame: Frame.default(0),
+      endFrame: Frame.optional(),
+      easing: z.enum(EASINGS).default("easeInOut"),
+      arc: z.number().min(-1080).max(1080).optional(),
+      startAngle: z.number().min(-360).max(360).optional(),
+      stops: z.array(Frame).max(64).optional(),
+      stepFrames: z.number().int().min(1).max(600).optional(),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      return { data: session(ctx).dispatch("scene.cameraMove", i, ctx.source, label(`camera ${i.move}`)) };
+    },
+  }),
+  tool({
+    name: "scene_bake",
+    description:
+      "Render all frames of a 3D scene (final quality by default) and save them as a video asset in the project. Use it to show one scene on a screen inside another (media plane / arcadePortal mediaAssetId) or to edit a heavy scene as plain video. Re-baking an unchanged scene reuses the file.",
+    input: z.object({ sceneId: Id, quality: z.enum(["draft", "final"]).default("final") }),
+    mutates: true,
+    async run(ctx, i) {
+      const a = await ctx.engine.bakeScene(i.sceneId, { quality: i.quality, source: ctx.source });
+      return { data: { assetId: a.id, path: a.path, duration: a.meta.duration } };
     },
   }),
   tool({
@@ -821,6 +976,41 @@ export const TOOLS: ToolDef[] = [
     mutates: false,
     async run(ctx, i) {
       return { data: ctx.engine.validateRender({ preset: i.preset }) };
+    },
+  }),
+  tool({
+    name: "sfx_generate",
+    description: `Synthesize an original sound effect and (with anchorFrame) place it on the timeline. Kinds: ${SFX_KINDS.map((k) => `${k} - ${SFX_SPECS[k].description}`).join(" | ")}. Placement follows the effect: risers END on the anchor, whooshes PEAK on it, the rest START on it - so anchor on the transition/drop frame. Goes on trackId or the first SFX-role audio track (created if missing). Same parameters reuse the same file.`,
+    input: z.object({
+      kind: z.enum(SFX_KINDS),
+      anchorFrame: Frame.optional(),
+      trackId: Id.optional(),
+      duration: z.number().min(0.05).max(12).optional(),
+      pitch: z.number().min(0.25).max(4).optional(),
+      seed: z.number().int().min(0).max(1_000_000).optional(),
+      gainDb: z.number().min(-60).max(12).default(0),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      const asset = await ctx.engine.generateSfx(i.kind, { duration: i.duration, pitch: i.pitch, seed: i.seed }, ctx.source);
+      if (i.anchorFrame === undefined) return { data: { assetId: asset.id, path: asset.path, duration: asset.meta.duration } };
+      const s = session(ctx);
+      const fps = s.project.settings.fps.num / s.project.settings.fps.den;
+      const place = sfxPlacement(i.kind, i.anchorFrame, fps, i.duration);
+      const r = s.transaction(label(`sfx ${i.kind}`), ctx.source, (tx) => {
+        let trackId = i.trackId ?? tx.project.tracks.find((t) => t.kind === "audio" && t.role === "sfx")?.id;
+        if (!trackId) trackId = tx.dispatch("track.add", { kind: "audio", name: "SFX", role: "sfx" }).trackId;
+        // SFX overlap freely: put it on another SFX track if this one is busy there.
+        const busy = (id: string) => tx.project.tracks.find((t) => t.id === id)!.clips.some((c) => c.start < place.start + place.frames && c.start + c.duration > place.start);
+        if (busy(trackId)) {
+          const free = tx.project.tracks.find((t) => t.kind === "audio" && t.role === "sfx" && !busy(t.id));
+          trackId = free?.id ?? tx.dispatch("track.add", { kind: "audio", name: "SFX", role: "sfx" }).trackId;
+        }
+        const c = tx.dispatch("clip.add", { trackId, clip: { type: "media", assetId: asset.id, start: place.start, duration: place.frames, name: i.kind }, mode: "error" });
+        if (i.gainDb) tx.dispatch("clip.update", { clipId: c.clipId, props: { volumeDb: i.gainDb } });
+        return { trackId, clipId: c.clipId };
+      });
+      return { data: { assetId: asset.id, ...r, start: place.start, frames: place.frames } };
     },
   }),
   tool({

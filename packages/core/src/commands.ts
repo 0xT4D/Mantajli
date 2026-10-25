@@ -1,12 +1,13 @@
 import { produce, type Draft } from "immer";
 import { z } from "zod";
-import { lookSpec, normalizeEffectParams, EFFECT_TYPES, TRANSITION_TYPES } from "./effects.js";
+import { lookSpec, normalizeEffectParams, EFFECT_TYPES, TRANSITION_TYPES, LOOKS, type LookSpec } from "./effects.js";
 import { fail } from "./errors.js";
-import { cloneClip, makeColorClip, makeMediaClip, makeSceneClip, makeTextClip, makeTrack, makeSceneObject } from "./factories.js";
+import { cloneClip, makeAdjustmentClip, makeColorClip, makeMediaClip, makeSceneClip, makeTextClip, makeTrack, makeSceneObject } from "./factories.js";
 import { newId } from "./ids.js";
 import {
   AiPlanSchema,
   AssetSchema,
+  ClipSchema,
   EASINGS,
   ExportSettingsSchema,
   MixSettingsSchema,
@@ -27,9 +28,11 @@ import {
   BLEND_MODES,
   type Clip,
   type Project,
+  type SceneObject,
   type Track,
 } from "./schema.js";
 import { buildSceneFromTemplate, SCENE_TEMPLATE_IDS } from "./sceneTemplates.js";
+import { CAMERA_MOVES, cameraMove } from "./cameraRigs.js";
 import { TEXT_ANIMATIONS } from "./effects.js";
 import { roundSeconds } from "./time.js";
 import { clipEnd, clipsInRange, evalKeyframes, hasSpeedRamp, sourceTimeAt, findAsset, findScene, MAX_SPEED, maxClipDuration, MIN_SPEED, sortTrackClips, sourceOffset } from "./timeline.js";
@@ -95,6 +98,18 @@ function getClip(p: D, clipId: string): { track: Draft<Track>; clip: Draft<Clip>
     if (index >= 0) return { track, clip: track.clips[index]!, index };
   }
   fail("not_found", `Clip ${clipId} not found`);
+}
+
+/** Assets referenced by a scene object must exist and be of the right kind. */
+function assertSceneObjectAssets(p: D, o: SceneObject | Draft<SceneObject>) {
+  if (o.media) {
+    const a = findAsset(p as Project, o.media.assetId);
+    if (!a || (a.kind !== "image" && a.kind !== "video")) fail("missing_asset", `Media plane "${o.name}" needs an imported image or video (asset ${o.media.assetId})`);
+  }
+  if (o.scatter?.modelAssetId) {
+    const a = findAsset(p as Project, o.scatter.modelAssetId);
+    if (!a || a.kind !== "model") fail("missing_asset", `Scatter "${o.name}" model ${o.scatter.modelAssetId} is not an imported 3D model`);
+  }
 }
 
 function assertUnlocked(t: Draft<Track>) {
@@ -375,7 +390,7 @@ export const COMMANDS = {
   // ------------------------------------------------------------ clips
 
   "clip.add": def({
-    description: "Add a media, text, scene or colour clip to a track.",
+    description: "Add a media, text, scene, colour or adjustment clip to a track.",
     params: z.object({
       trackId: IdSchema,
       clip: z.discriminatedUnion("type", [
@@ -413,6 +428,12 @@ export const COMMANDS = {
           duration: z.number().int().positive(),
           name: z.string().optional(),
         }),
+        z.object({
+          type: z.literal("adjustment"),
+          start: z.number().int().nonnegative(),
+          duration: z.number().int().positive(),
+          name: z.string().optional(),
+        }),
       ]),
       mode: OverlapModeSchema,
     }),
@@ -446,6 +467,9 @@ export const COMMANDS = {
         }
         case "color":
           clip = makeColorClip({ ...init, name: init.name ?? "Color" });
+          break;
+        case "adjustment":
+          clip = makeAdjustmentClip({ ...init, name: init.name ?? "Adjustment" });
           break;
       }
       assertClipFitsTrack(p, track, clip);
@@ -545,6 +569,36 @@ export const COMMANDS = {
     },
   }),
 
+  "clip.paste": def({
+    description:
+      "Paste copied clips (full clip objects with their source track) at a frame, keeping their relative timing and tracks. Fresh ids; one undo step. A clip whose track is gone or does not fit goes to the first track of the same kind.",
+    params: z.object({
+      items: z.array(z.object({ trackId: IdSchema, clip: ClipSchema })).min(1).max(500),
+      at: z.number().int().nonnegative(),
+      mode: OverlapModeSchema,
+    }),
+    apply(p, { items, at, mode }) {
+      const first = Math.min(...items.map((i) => i.clip.start));
+      const clipIds: string[] = [];
+      for (const it of items) {
+        const kindOf = p.tracks.find((t) => t.id === it.trackId)?.kind;
+        const track = (kindOf && getTrack(p, it.trackId)) || p.tracks.find((t) => t.kind === (it.clip.type === "text" ? "text" : it.clip.type === "scene" ? "scene" : "video"));
+        if (!track) fail("not_found", `No track to paste "${it.clip.name}" into`);
+        assertUnlocked(track);
+        if (it.clip.type === "media" && !findAsset(p as Project, it.clip.assetId)) fail("missing_asset", `Media of "${it.clip.name}" is not in this project`);
+        if (it.clip.type === "scene" && !findScene(p as Project, it.clip.sceneId)) fail("not_found", `3D scene of "${it.clip.name}" is not in this project`);
+        const copy = cloneClip(it.clip) as Draft<Clip>;
+        copy.start = at + (it.clip.start - first);
+        assertClipFitsTrack(p, track, copy as Clip);
+        place(p, track, copy, mode);
+        track.clips.push(copy);
+        sortTrackClips(track as Track);
+        clipIds.push(copy.id);
+      }
+      return { clipIds };
+    },
+  }),
+
   "clip.duplicate": def({
     description: "Duplicate a clip, by default right after the original.",
     params: z.object({ clipId: IdSchema, start: z.number().int().nonnegative().optional(), trackId: IdSchema.optional(), mode: OverlapModeSchema }),
@@ -637,7 +691,9 @@ export const COMMANDS = {
     description: "Set (or clear with null) the transition into a clip from the previous shot on its track.",
     params: z.object({
       clipId: IdSchema,
-      transition: z.object({ type: z.enum(TRANSITION_TYPES as [string, ...string[]]), duration: z.number().int().min(1).max(600) }).nullable(),
+      transition: z
+        .object({ type: z.enum(TRANSITION_TYPES as [string, ...string[]]), duration: z.number().int().min(1).max(600), easing: z.enum(EASINGS).optional(), intensity: z.number().min(0).max(2).optional() })
+        .nullable(),
     }),
     apply(p, { clipId, transition }) {
       const { track, clip } = getClip(p, clipId);
@@ -707,6 +763,31 @@ export const COMMANDS = {
   }),
 
   // ------------------------------------------------------------ effects
+
+  "look.save": def({
+    description: "Save a clip's enabled effects as a reusable look in this project (replaces a saved look with the same label).",
+    params: z.object({ clipId: IdSchema, label: z.string().min(1).max(80), description: z.string().max(300).optional() }),
+    apply(p, { clipId, label, description }) {
+      const { clip } = getClip(p, clipId);
+      const effects = clip.effects.filter((e) => e.enabled).map((e) => ({ type: e.type, params: { ...e.params } }));
+      if (!effects.length) fail("invalid_params", "The clip has no enabled effects to save");
+      if (LOOKS.some((l) => l.label.toLowerCase() === label.toLowerCase())) fail("conflict", `"${label}" is a built-in look name`);
+      const existing = p.looks.find((l) => l.label.toLowerCase() === label.toLowerCase());
+      const look = { id: existing?.id ?? newId("look"), label, description: description ?? effects.map((e) => e.type).join(" + "), effects };
+      if (existing) Object.assign(existing, look);
+      else p.looks.push(look);
+      return { lookId: look.id };
+    },
+  }),
+
+  "look.remove": def({
+    description: "Delete a look saved in this project.",
+    params: z.object({ lookId: IdSchema }),
+    apply(p, { lookId }) {
+      if (!p.looks.some((l) => l.id === lookId)) fail("not_found", `Saved look ${lookId} not found`);
+      p.looks = p.looks.filter((l) => l.id !== lookId);
+    },
+  }),
 
   "effect.add": def({
     description: "Append an effect to a clip's effect stack.",
@@ -790,7 +871,7 @@ export const COMMANDS = {
       const beats = [...new Set(p.markers.filter((m) => kinds.includes(m.kind) && m.frame > o.start && m.frame < o.end).map((m) => m.frame))].sort((a, b) => a - b);
       if (!beats.length) fail("invalid_params", `No ${o.on} markers between frames ${o.start} and ${o.end}. Analyse the music first (beat markers).`);
       const cuts = [o.start, ...beats.filter((_, i) => (i + 1) % o.every === 0), o.end];
-      const look = o.look ? (lookSpec(o.look) ?? fail("unsupported", `Unknown look ${o.look}`)) : undefined;
+      const look = o.look ? (lookSpec(o.look, p.looks as LookSpec[]) ?? fail("unsupported", `Unknown look ${o.look}`)) : undefined;
       const assets = o.assetIds.map((id) => {
         const a = findAsset(p as Project, id) ?? fail("missing_asset", `Asset ${id} not found`);
         if (a.kind !== "video" && a.kind !== "image") fail("invalid_params", `"${a.name}" is not a video or image`);
@@ -883,14 +964,17 @@ export const COMMANDS = {
     params: z.object({
       beats: z.array(z.object({ frame: z.number().int().nonnegative(), strength: z.number().min(0).max(1).optional(), downbeat: z.boolean().optional() })),
       onsets: z.array(z.number().int().nonnegative()).default([]),
+      /** Song sections (drop, breakdown, build...) as labelled section markers. */
+      sections: z.array(z.object({ frame: z.number().int().nonnegative(), label: z.string().max(40), energy: z.number().min(0).max(1).optional() })).default([]),
     }),
-    apply(p, { beats, onsets }) {
+    apply(p, { beats, onsets, sections }) {
       p.markers = p.markers.filter((m) => m.source !== "analysis");
       for (const b of beats)
         p.markers.push(MarkerSchema.parse({ id: newId("mk"), frame: b.frame, kind: b.downbeat ? "downbeat" : "beat", source: "analysis", strength: b.strength }));
       for (const f of onsets) p.markers.push(MarkerSchema.parse({ id: newId("mk"), frame: f, kind: "onset", source: "analysis" }));
+      for (const sct of sections) p.markers.push(MarkerSchema.parse({ id: newId("mk"), frame: sct.frame, kind: "section", label: sct.label, source: "analysis", strength: sct.energy }));
       p.markers.sort((a, b) => a.frame - b.frame);
-      return { beats: beats.length, onsets: onsets.length };
+      return { beats: beats.length, onsets: onsets.length, sections: sections.length };
     },
   }),
 
@@ -907,15 +991,27 @@ export const COMMANDS = {
       accentB: HexColor.optional(),
       material: MaterialSchema.shape.preset.unwrap().optional(),
       modelAssetId: IdSchema.optional(),
+      /** Image or video for templates with a screen (arcadePortal, stageReveal). */
+      mediaAssetId: IdSchema.optional(),
       particles: z.boolean().optional(),
       fog: z.number().min(0).max(1).optional(),
+      /** Stations of turntableStage (2-8). */
+      count: z.number().int().min(2).max(8).optional(),
+      /** Frames where snap camera moves start (turntableStage), e.g. beat markers. */
+      stops: z.array(z.number().int().nonnegative()).max(64).optional(),
     }),
     apply(p, { template, ...params }) {
       if (params.modelAssetId) {
         const a = findAsset(p as Project, params.modelAssetId);
         if (!a || a.kind !== "model") fail("missing_asset", `Model asset ${params.modelAssetId} not found`);
       }
-      const scene = buildSceneFromTemplate(template, params);
+      let mediaAspect: number | undefined;
+      if (params.mediaAssetId) {
+        const a = findAsset(p as Project, params.mediaAssetId);
+        if (!a || (a.kind !== "image" && a.kind !== "video")) fail("missing_asset", `Image/video asset ${params.mediaAssetId} not found`);
+        if (a.meta.width && a.meta.height) mediaAspect = a.meta.width / a.meta.height;
+      }
+      const scene = buildSceneFromTemplate(template, { ...params, mediaAspect, aspect: p.settings.width / p.settings.height });
       p.scenes.push(scene);
       return { sceneId: scene.id, objectIds: scene.objects.map((o) => ({ id: o.id, name: o.name, kind: o.kind })) };
     },
@@ -956,7 +1052,7 @@ export const COMMANDS = {
   }),
 
   "scene.addObject": def({
-    description: "Add an object (mesh, text, camera, light, model, particles) to a scene.",
+    description: "Add an object (mesh, text, camera, light, model, particles, media plane, scatter) to a scene.",
     params: z.object({ sceneId: IdSchema, object: SceneObjectSchema.omit({ id: true }).partial().required({ kind: true }) }),
     apply(p, { sceneId, object }) {
       const s = p.scenes.find((s) => s.id === sceneId);
@@ -964,13 +1060,16 @@ export const COMMANDS = {
       const o = makeSceneObject({ name: object.name ?? object.kind, ...object } as Parameters<typeof makeSceneObject>[0]);
       if (o.kind === "mesh" && !o.mesh) o.mesh = { primitive: "cube", size: 1, smooth: true };
       if (o.kind === "text" && !o.text) fail("invalid_params", "Text objects need text.body");
-      if (o.kind === "camera" && !o.camera) o.camera = { focalLength: 50, dof: false, focusDistance: 5, fStop: 2.8 };
-      if (o.kind === "light" && !o.light) o.light = { type: "area", color: "#ffffff", energy: 500, size: 1 };
+      if (o.kind === "camera" && !o.camera) o.camera = SceneObjectSchema.shape.camera.unwrap().parse({ focalLength: 50, dof: false, focusDistance: 5, fStop: 2.8 });
+      if (o.kind === "light" && !o.light) o.light = SceneObjectSchema.shape.light.unwrap().parse({ type: "area", color: "#ffffff", energy: 500, size: 1 });
       if (o.kind === "particles" && !o.particles) o.particles = { count: 400, size: 0.03, color: "#ffffff", emission: 5, area: [6, 6, 4], drift: 0.5, seed: 1 };
       if (o.kind === "model") {
         const a = o.model && findAsset(p as Project, o.model.assetId);
         if (!a || a.kind !== "model") fail("missing_asset", "Model objects need model.assetId of an imported 3D asset");
       }
+      if (o.kind === "scatter" && !o.scatter) o.scatter = SceneObjectSchema.shape.scatter.unwrap().parse({});
+      if (o.kind === "media" && !o.media) fail("invalid_params", "Media planes need media.assetId of an imported image or video");
+      assertSceneObjectAssets(p, o);
       s.objects.push(o);
       if (o.kind === "camera" && !s.activeCameraId) s.activeCameraId = o.id;
       return { objectId: o.id };
@@ -979,11 +1078,24 @@ export const COMMANDS = {
 
   "scene.updateObject": def({
     description: "Update an object's transform, material or kind-specific settings.",
-    params: z.object({ sceneId: IdSchema, objectId: IdSchema, patch: patchSchema(SceneObjectSchema.omit({ id: true, kind: true, animation: true }), { deep: true }) }),
-    apply(p, { sceneId, objectId, patch }) {
+    params: z.object({
+      sceneId: IdSchema,
+      objectId: IdSchema,
+      patch: patchSchema(SceneObjectSchema.omit({ id: true, kind: true, animation: true }), { deep: true }).default({}),
+      /** Optional settings to remove (a patch cannot express "absent"): the path also drops its pathProgress keys. */
+      unset: z.array(z.enum(["path", "text.sideMaterial", "camera.trackTargetId"])).default([]),
+    }),
+    apply(p, { sceneId, objectId, patch, unset }) {
       const s = p.scenes.find((s) => s.id === sceneId);
       const o = s?.objects.find((o) => o.id === objectId);
       if (!s || !o) fail("not_found", `Object ${objectId} not found in scene ${sceneId}`);
+      for (const u of unset) {
+        if (u === "path") {
+          delete o.path;
+          o.animation = o.animation.filter((a) => a.property !== "pathProgress");
+        } else if (u === "text.sideMaterial" && o.text) delete o.text.sideMaterial;
+        else if (u === "camera.trackTargetId" && o.camera) delete o.camera.trackTargetId;
+      }
       for (const [k, v] of Object.entries(patch)) {
         if (v === undefined) continue;
         const cur = (o as Record<string, unknown>)[k];
@@ -991,6 +1103,7 @@ export const COMMANDS = {
         else (o as Record<string, unknown>)[k] = v;
       }
       SceneObjectSchema.parse(JSON.parse(JSON.stringify(o)));
+      assertSceneObjectAssets(p, o as SceneObject);
     },
   }),
 
@@ -1025,8 +1138,46 @@ export const COMMANDS = {
       }
       if ((property === "focalLength" || property === "focusDistance") && o.kind !== "camera") fail("invalid_params", `${property} only applies to cameras`);
       if (property === "energy" && o.kind !== "light") fail("invalid_params", "energy only applies to lights");
+      if (property === "pathProgress" && !o.path) fail("invalid_params", "pathProgress needs a path on the object (set path.points first)");
       o.animation = o.animation.filter((a) => a.property !== property);
       if (keyframes.length) o.animation.push({ property, keyframes: [...keyframes].sort((a, b) => a.frame - b.frame) });
+    },
+  }),
+
+  "scene.cameraMove": def({
+    description:
+      "Give a camera a preset move along a smooth path (orbit, dolly in/out, crane up/down, truck left/right) looking at a target object. Replaces the camera's path and pathProgress keys and resets its location offset. With stops (frames, e.g. beats) it travels in equal snap-and-settle steps that start on those frames and hold in between.",
+    params: z.object({
+      sceneId: IdSchema,
+      cameraId: IdSchema,
+      move: z.enum(CAMERA_MOVES),
+      targetId: IdSchema.optional(),
+      distance: z.number().positive().max(1000).default(8),
+      height: z.number().min(-1000).max(1000).default(1.5),
+      startFrame: z.number().int().nonnegative().default(0),
+      endFrame: z.number().int().nonnegative().optional(),
+      easing: z.enum(EASINGS).default("easeInOut"),
+      arc: z.number().min(-1080).max(1080).optional(),
+      startAngle: z.number().min(-360).max(360).optional(),
+      stops: z.array(z.number().int().nonnegative()).max(64).optional(),
+      stepFrames: z.number().int().min(1).max(600).optional(),
+    }),
+    apply(p, { sceneId, cameraId, targetId, move, ...o }) {
+      const s = p.scenes.find((s) => s.id === sceneId);
+      const cam = s?.objects.find((x) => x.id === cameraId);
+      if (!s || !cam) fail("not_found", `Camera ${cameraId} not found in scene ${sceneId}`);
+      if (cam.kind !== "camera" || !cam.camera) fail("invalid_params", `${cam.name} is not a camera`);
+      const target = targetId ? s.objects.find((x) => x.id === targetId) : undefined;
+      if (targetId && !target) fail("not_found", `Target ${targetId} not found in scene`);
+      const endFrame = Math.min(o.endFrame ?? s.durationFrames - 1, s.durationFrames);
+      const r = cameraMove(move, { ...o, endFrame, target: target ? [...target.location] : [0, 0, 0] });
+      for (const k of r.keyframes) if (k.frame > s.durationFrames) fail("invalid_params", `Move key at frame ${k.frame} is beyond the scene length ${s.durationFrames}`);
+      cam.path = { points: r.path.points, closed: r.path.closed, followTangent: false };
+      cam.location = [0, 0, 0];
+      if (target) cam.camera.trackTargetId = target.id;
+      cam.animation = cam.animation.filter((a) => a.property !== "pathProgress" && a.property !== "location");
+      cam.animation.push({ property: "pathProgress", keyframes: r.keyframes });
+      return { points: r.path.points.length, keyframes: r.keyframes.length };
     },
   }),
 
