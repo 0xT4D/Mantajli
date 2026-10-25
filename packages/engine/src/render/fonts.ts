@@ -19,13 +19,26 @@ const WINDOWS_FONTS: Record<string, [string, string]> = {
   "Century Gothic": ["GOTHIC.TTF", "GOTHICB.TTF"],
 };
 
+/**
+ * Linux: metric-compatible substitutes from fonts-liberation (Arial, Times New Roman, Courier
+ * New) and DejaVu. Without them 2D text depends on fontconfig and 3D text falls back to
+ * Blender's built-in font, which is ~35 % wider than the templates' text fitting assumes.
+ */
+const LINUX_FONTS: Record<string, [string, string]> = {
+  Arial: ["LiberationSans-Regular.ttf", "LiberationSans-Bold.ttf"],
+  "Times New Roman": ["LiberationSerif-Regular.ttf", "LiberationSerif-Bold.ttf"],
+  "Courier New": ["LiberationMono-Regular.ttf", "LiberationMono-Bold.ttf"],
+  "DejaVu Sans": ["DejaVuSans.ttf", "DejaVuSans-Bold.ttf"],
+};
+
 function fontDirs(): string[] {
   if (process.platform === "win32") {
     const win = process.env.WINDIR ?? "C:\\Windows";
     return [path.join(win, "Fonts"), path.join(process.env.LOCALAPPDATA ?? "", "Microsoft", "Windows", "Fonts")];
   }
   if (process.platform === "darwin") return ["/System/Library/Fonts/Supplemental", "/Library/Fonts"];
-  return ["/usr/share/fonts/truetype/msttcorefonts", "/usr/share/fonts/truetype/dejavu"];
+  // Debian/Ubuntu and Fedora layouts.
+  return ["/usr/share/fonts/truetype/liberation", "/usr/share/fonts/liberation-sans", "/usr/share/fonts/liberation-serif", "/usr/share/fonts/liberation-mono", "/usr/share/fonts/truetype/dejavu", "/usr/share/fonts/dejavu-sans-fonts"];
 }
 
 const cache = new Map<string, string | null>();
@@ -34,7 +47,7 @@ const cache = new Map<string, string | null>();
 export async function resolveFontFile(family: string, bold: boolean): Promise<string | undefined> {
   const key = `${family}|${bold}`;
   if (cache.has(key)) return cache.get(key) ?? undefined;
-  const files = WINDOWS_FONTS[family];
+  const files = process.platform === "linux" ? LINUX_FONTS[family] : WINDOWS_FONTS[family];
   let found: string | undefined;
   if (files) {
     for (const dir of fontDirs()) {
@@ -52,10 +65,10 @@ export async function resolveFontFile(family: string, bold: boolean): Promise<st
 /** Families that resolve to an installed file (for the UI font picker). */
 export async function availableFontFamilies(): Promise<string[]> {
   const out: string[] = [];
-  for (const family of Object.keys(WINDOWS_FONTS)) if (await resolveFontFile(family, false)) out.push(family);
+  for (const family of Object.keys(process.platform === "linux" ? LINUX_FONTS : WINDOWS_FONTS)) if (await resolveFontFile(family, false)) out.push(family);
   return out;
 }
 
 export async function defaultFontFile(bold = true): Promise<string | undefined> {
-  return (await resolveFontFile("Arial", bold)) ?? (await resolveFontFile("Segoe UI", bold));
+  return (await resolveFontFile("Arial", bold)) ?? (await resolveFontFile("Segoe UI", bold)) ?? (await resolveFontFile("DejaVu Sans", bold));
 }

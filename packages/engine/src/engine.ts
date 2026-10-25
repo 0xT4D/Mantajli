@@ -629,7 +629,8 @@ export class Engine extends EventEmitter {
     });
     const scenes = plan.sceneIds.map((id) => {
       const sc = findScene(p, id);
-      return sc ? sceneRenderKey({ project: p, scene: sc, quality: "draft", resolutionScale: 0 }) : id;
+      // Includes the 3D font: a different default font renders different pixels.
+      return sc ? sceneRenderKey({ project: p, scene: sc, quality: "draft", resolutionScale: 0, defaultFont: this.default3dFont }) : id;
     });
     // Beat-driven motion effects read the timeline markers.
     const markers = plan.layers.some((l) => l.clip.effects.some((e) => e.enabled && e.type === "beatPulse")) ? p.markers.map((m) => [m.frame, m.kind]) : undefined;

@@ -193,6 +193,23 @@ describe("scenes", () => {
     expect(validateProject(p).filter((i) => i.severity === "error")).toEqual([]);
   });
 
+  it("fits 3D titles to the frame width (long titles in a vertical frame)", () => {
+    const size = (format: "landscape" | "vertical", template: "chromeTitle" | "metalTitle", text: string) => {
+      const p = createProject({ name: "F", format });
+      const r = run(p, "scene.create", { name: "t", durationFrames: 60, template, text });
+      return r.project.scenes[0]!.objects.find((o) => o.kind === "text")!.text!.size;
+    };
+    // Short landscape titles keep the template's full size.
+    expect(size("landscape", "chromeTitle", "TITLE")).toBe(1.4);
+    expect(size("landscape", "metalTitle", "TITLE")).toBe(1.3);
+    // 10 characters in 9:16: 0.42 x size per character must fit 80 % of the visible width
+    // at the end of the push-in (8.5 m, 50 mm: 2 x 8.5 x 0.36 x 9/16 x 0.8 = 2.75 m).
+    const chrome = size("vertical", "chromeTitle", "NIGHT CITY");
+    expect(chrome).toBeLessThan(0.7);
+    expect(10 * 0.42 * 1.05 * chrome).toBeLessThanOrEqual(2 * 8.5 * 0.36 * (9 / 16) * 0.8 + 1e-9);
+    expect(size("vertical", "metalTitle", "NIGHT CITY")).toBeLessThan(0.7);
+  });
+
   it("validates animation keyframe arity", () => {
     let p = createProject({ name: "S" });
     const r = run(p, "scene.create", { name: "x", durationFrames: 60, template: "empty" });

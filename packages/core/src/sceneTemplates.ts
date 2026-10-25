@@ -80,6 +80,17 @@ function finish(p: SceneTemplateParams, template: string, objects: SceneObject[]
   });
 }
 
+/**
+ * 3D text size that fits the longest line of `body` in `fraction` of the frame width, seen
+ * from `distance` m with a `focal` mm lens (Blender fits the 36 mm sensor to the wider side).
+ * Bold capitals advance about 0.42 x size per character (measured in renders).
+ */
+function fitTextSize(body: string, maxSize: number, distance: number, focal: number, aspect: number, letterSpacing = 1, fraction = 0.8): number {
+  const longest = Math.max(1, ...body.split("\n").map((l) => l.length));
+  const halfWidth = distance * (18 / focal) * Math.min(1, aspect) * fraction;
+  return Math.min(maxSize, (2 * halfWidth) / (longest * 0.42 * letterSpacing));
+}
+
 export const SCENE_TEMPLATES: SceneTemplateSpec[] = [
   {
     id: "chromeTitle",
@@ -89,12 +100,15 @@ export const SCENE_TEMPLATES: SceneTemplateSpec[] = [
       const a = p.accentA ?? "#8a2be2";
       const b = p.accentB ?? "#00e5ff";
       const d = p.durationFrames;
+      const body = p.text ?? "TITLE";
+      // Fits the frame at the end of the push-in (camera 8.5 m away), e.g. long titles in 9:16.
+      const size = fitTextSize(body, 1.4, 8.5, 50, p.aspect ?? 16 / 9, 1.05);
       const text = makeSceneObject({
         kind: "text",
         name: "Title",
         location: [0, 0, 0],
         rotation: [90, 0, 0],
-        text: { body: p.text ?? "TITLE", size: 1.4, extrude: 0.18, bevel: 0.03, align: "center", letterSpacing: 1.05 },
+        text: { body, size, extrude: 0.18 * (size / 1.4), bevel: 0.03 * (size / 1.4), align: "center", letterSpacing: 1.05 },
         material: { preset: p.material ?? "chrome", baseColor: "#e8e8f0", metallic: 1, roughness: 0.08, emissionColor: "#000000", emissionStrength: 0, transmission: 0 },
         animation: [
           { property: "rotation", keyframes: [{ frame: 0, value: [90, 0, -14], easing: "easeOut" }, { frame: d - 1, value: [90, 0, 6], easing: "linear" }] },
@@ -506,11 +520,8 @@ SCENE_TEMPLATES.push(
       const d = p.durationFrames;
       const a = p.accentA ?? "#ff2a2a";
       const body = p.text ?? "TITLE";
-      // Fit the longest line to ~80 % of the frame width at the end of the push-in
-      // (bold capitals advance about 0.42 x size per character, measured in renders).
-      const longest = Math.max(1, ...body.split("\n").map((l) => l.length));
-      const halfWidth = 9 * (18 / 50) * Math.min(1, p.aspect ?? 16 / 9) * 0.8;
-      const size = Math.min(1.3, (2 * halfWidth) / (longest * 0.42));
+      // Fit the longest line to ~80 % of the frame width at the end of the push-in.
+      const size = fitTextSize(body, 1.3, 9, 50, p.aspect ?? 16 / 9);
       const text = makeSceneObject({
         kind: "text",
         name: "Title",
