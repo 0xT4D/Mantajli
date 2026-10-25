@@ -136,7 +136,8 @@ export function VoiceDialog() {
     void call<ToolResult<{ providers: Provider[] }>>("tools.call", { name: "voice_providers", input: {} }).then((r) => {
       const list = r.data?.providers ?? [];
       setProviders(list);
-      const first = list.find((x) => x.available);
+      // Pre-select a local engine only; a cloud engine must be picked by the user.
+      const first = list.find((x) => x.available && x.kind === "local");
       if (first) {
         setProvider(first.id);
         setVoice(defaultVoice(first.voices));

@@ -139,6 +139,8 @@ describe("cloud voice providers (against a local mock of their APIs)", () => {
   });
 
   it("sends the documented request, levels the result and reports auth failures", async () => {
+    // Keys present, yet the default is never a cloud provider: text leaves the machine only when one is named.
+    expect((await defaultTtsProvider(engine.ffmpeg))?.kind ?? "local").toBe("local");
     await engine.createProject({ name: "Cloud voice", format: "landscape", parentDir: ROOT });
     const r = await tool("voice_narrate", { segments: [{ text: "Premium, minimal, quiet." }], provider: "openai", voice: "coral", rate: 1.1, style: "calm documentary narrator", captions: false });
     expect(r.ok, JSON.stringify(r.error)).toBe(true);

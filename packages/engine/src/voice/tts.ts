@@ -292,8 +292,9 @@ export function ttsProviders(ffmpeg: string): TtsProvider[] {
 }
 
 /** First available provider, local ones first. */
+/** The first available local provider. Cloud providers are never a default: script text leaves the machine only when one is named. */
 export async function defaultTtsProvider(ffmpeg: string): Promise<TtsProvider | undefined> {
-  for (const p of ttsProviders(ffmpeg)) if ((await p.status()).available) return p;
+  for (const p of ttsProviders(ffmpeg)) if (p.kind === "local" && (await p.status()).available) return p;
   return undefined;
 }
 

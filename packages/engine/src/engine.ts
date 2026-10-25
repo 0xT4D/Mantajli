@@ -297,7 +297,7 @@ export class Engine extends EventEmitter {
     if (!text) fail("invalid_params", "Nothing to say: the text is empty");
     const provider = req.provider
       ? (ttsProviders(this.ffmpeg).find((p) => p.id === req.provider) ?? fail("invalid_params", `Unknown voice provider ${req.provider}`))
-      : ((await defaultTtsProvider(this.ffmpeg)) ?? fail("dependency_unavailable", "No text-to-speech engine is available (install espeak-ng, use Windows voices, or set OPENAI_API_KEY / ELEVENLABS_API_KEY)"));
+      : ((await defaultTtsProvider(this.ffmpeg)) ?? fail("dependency_unavailable", "No local text-to-speech engine is available (install espeak-ng or use Windows voices), or choose a cloud provider (OPENAI_API_KEY / ELEVENLABS_API_KEY) explicitly"));
     const st = await provider.status();
     if (!st.available) fail("dependency_unavailable", `${provider.label} is unavailable: ${st.reason}`);
     const request = { text, voice: req.voice, rate: req.rate, pitch: req.pitch, style: req.style };
