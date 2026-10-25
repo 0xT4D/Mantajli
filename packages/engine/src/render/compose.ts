@@ -23,6 +23,8 @@ export interface ComposeOptions {
   includeAudio?: boolean;
   /** Loudness target of the final mix (exports). */
   loudnessLufs?: number | null;
+  /** Measured gain to the loudness target (see ffgraph `loudnessGainDb`). */
+  loudnessGainDb?: number;
   signal?: AbortSignal;
   onProgress?: (f: number) => void;
   keepWorkDir?: boolean;
@@ -41,6 +43,7 @@ export async function compose(opts: ComposeOptions): Promise<{ outPath: string; 
     fontFile: opts.fontFile,
     includeAudio: opts.includeAudio ?? opts.output === "video",
     loudnessLufs: opts.loudnessLufs,
+    loudnessGainDb: opts.loudnessGainDb,
     output: opts.output,
     writeFile: (name, content) => void pending.push(writeFile(path.join(workDir, name), content, "utf8")),
   });

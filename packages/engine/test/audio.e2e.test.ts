@@ -62,6 +62,6 @@ describe("audio mix", () => {
     await engine.startExport({ outPath: out2 }).promise;
     const log = await ff(["-i", out2, "-af", "ebur128", "-f", "null", "-"]);
     const integrated = Number(/I:\s*(-?[\d.]+) LUFS/.exec(log.split("Summary:").pop()!)?.[1]);
-    expect(Math.abs(integrated - -14)).toBeLessThan(1.5);
+    expect(Math.abs(integrated - -14)).toBeLessThan(0.5); // two-pass gain (single-pass loudnorm missed by up to 1.3 LU)
   });
 });

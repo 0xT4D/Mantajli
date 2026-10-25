@@ -57,7 +57,7 @@ describe("sound design and mix metering through the tools", () => {
     await tool("export_set_settings", { loudnessLufs: -14 });
     const norm = await tool<{ integratedLufs: number; truePeakDb: number; exportLoudnessTarget: number }>("audio_meter", {});
     expect(norm.exportLoudnessTarget).toBe(-14);
-    expect(Math.abs(norm.integratedLufs + 14)).toBeLessThan(1.5);
+    expect(Math.abs(norm.integratedLufs + 14)).toBeLessThan(0.5);
     expect(norm.truePeakDb).toBeLessThan(0);
   }, 300_000);
 });

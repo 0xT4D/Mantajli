@@ -72,6 +72,8 @@ export interface GraphContext {
   output: "video" | "still";
   /** Integrated loudness target (LUFS) for the final mix; null/undefined = as mixed. */
   loudnessLufs?: number | null;
+  /** Measured gain that brings this mix to the target (two-pass); replaces single-pass loudnorm. */
+  loudnessGainDb?: number;
 }
 
 export interface BuiltGraph {
@@ -832,8 +834,12 @@ export function buildGraph(ctx: GraphContext): BuiltGraph {
     if (labels.length === 0) stmts.push(`anullsrc=r=${SR}:cl=stereo,atrim=end_sample=${total}[${audioLabel}]`);
     else {
       const mix = labels.length === 1 ? `[${labels[0]}]anull` : `${labels.map((l) => `[${l}]`).join("")}amix=inputs=${labels.length}:normalize=0:duration=longest`;
-      // Optional EBU R128 normalisation (single-pass loudnorm resamples internally, so resample back).
-      const loud = ctx.loudnessLufs != null ? `loudnorm=I=${n6(ctx.loudnessLufs)}:TP=-1.5:LRA=11,aresample=${SR},` : "";
+      // Loudness target: the measured two-pass gain (exports, meter), else single-pass loudnorm, which
+      // resamples internally, so resample back.
+      const loud =
+        ctx.loudnessGainDb !== undefined ? `volume=${n6(ctx.loudnessGainDb)}dB,`
+        : ctx.loudnessLufs != null ? `loudnorm=I=${n6(ctx.loudnessLufs)}:TP=-1.5:LRA=11,aresample=${SR},`
+        : "";
       // Master ceiling -1 dBTP: limit at 4x oversampling (as true-peak meters measure), so inter-sample
       // overs cannot push the decoded signal past 0 dBFS the way a sample-peak limiter lets them.
       const ceiling = `aresample=${SR * 4},alimiter=limit=0.891:attack=5:release=50:level=0,aresample=${SR}`;

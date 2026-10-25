@@ -74,6 +74,8 @@ export class Engine extends EventEmitter {
   deps: DependencyStatus = { problems: ["not checked yet"] };
   session?: ProjectSession;
   private fontCache = new Map<string, string | undefined>();
+  /** Two-pass loudness gains by audio plan (see loudnessGain). */
+  private gainCache = new Map<string, number>();
   private sceneAutoTimer?: NodeJS.Timeout;
   /** sceneId -> running/queued auto-preview job (cancelled when superseded). */
   private sceneAutoJobs = new Map<string, { jobId: string; dir: string }>();
@@ -673,16 +675,27 @@ export class Engine extends EventEmitter {
     const start = Math.max(0, opts.start ?? 0);
     const end = Math.min(total, opts.end ?? total);
     if (end <= start) fail("invalid_params", "Nothing to measure: the range is empty");
-    const plan = { ...buildCompositionPlan(p, { rangeStart: start, rangeEnd: end }), layers: [] };
+    const plan = buildCompositionPlan(p, { rangeStart: start, rangeEnd: end });
     if (!plan.audio.length) fail("invalid_params", "No audio in this range");
-    const key = this.planKey(plan, { kind: "meter", loud: p.export.loudnessLufs ?? null });
+    // The export's gain comes from the whole timeline, so a range is metered at that same gain.
+    const gain = p.export.loudnessLufs != null ? await this.loudnessGain(buildCompositionPlan(p), p.export.loudnessLufs) : 0;
+    return { ...(await this.mixLoudness(plan, gain)), appliedGainDb: Math.round(gain * 10) / 10 };
+  }
+
+  /** Render a plan's audio (blank picture, export mix bus with `gainDb` before the limiter); cached by content. */
+  private async renderMix(plan: CompositionPlan, gainDb: number): Promise<string> {
+    const s = this.requireSession();
+    const p = s.project;
+    const audioPlan = { ...plan, layers: [] };
+    const gain = Math.round(gainDb * 100) / 100;
+    const key = this.planKey(audioPlan, { kind: "mix", gain, abr: p.export.audioBitrateK });
     const out = s.cacheDir("previews", `mix-${key}.mp4`);
     if (!(await exists(out)))
-      await this.jobs.submit({ type: "preview", label: "Measure mix", key: `meter:${key}` }, async (ctx) => {
+      await this.jobs.submit({ type: "preview", label: "Render mix", key: `mix:${key}` }, async (ctx) => {
         await compose({
           ffmpeg: this.ffmpeg,
           project: p,
-          plan,
+          plan: audioPlan,
           scale: 0.1,
           output: "video",
           outPath: out,
@@ -691,13 +704,40 @@ export class Engine extends EventEmitter {
           sceneFrames: () => undefined,
           fontFile: this.fontFor,
           draft: true,
-          loudnessLufs: p.export.loudnessLufs,
+          loudnessGainDb: gain,
           encoding: { codec: "h264", crf: 40, encoderPreset: "ultrafast", audioBitrateK: p.export.audioBitrateK },
           signal: ctx.signal,
         });
       }).promise;
+    return out;
+  }
+
+  private async mixLoudness(plan: CompositionPlan, gainDb: number): Promise<MixMeter> {
+    const out = await this.renderMix(plan, gainDb);
     const r = await run(this.ffmpeg, ["-hide_banner", "-nostats", "-i", out, "-map", "0:a", "-af", "ebur128=peak=true:framelog=info", "-f", "null", "-"], { timeoutMs: 300_000, maxCapture: 32 << 20 });
-    return parseEbur128(r.stderr, start, p.settings.fps.num / p.settings.fps.den);
+    return parseEbur128(r.stderr, plan.rangeStart, this.fps());
+  }
+
+  /**
+   * Gain (dB) that brings a plan's mix to `target` LUFS: measure the mix as is, apply the difference,
+   * measure again (the limiter takes some back) and correct once. Single-pass loudnorm missed
+   * -14 by 1.3 LU on the ARENA benchmark. 0 for a silent mix.
+   */
+  async loudnessGain(plan: CompositionPlan, target: number): Promise<number> {
+    if (!plan.audio.length) return 0;
+    const cacheKey = this.planKey({ ...plan, layers: [] }, { kind: "gain", target, abr: this.project.export.audioBitrateK });
+    const known = this.gainCache.get(cacheKey);
+    if (known !== undefined) return known;
+    let gain = 0;
+    for (let pass = 0; pass < 2; pass++) {
+      const measured = (await this.mixLoudness(plan, gain)).integratedLufs;
+      if (!Number.isFinite(measured)) break;
+      const d = target - measured;
+      if (pass > 0 && Math.abs(d) <= 0.3) break;
+      gain = Math.max(-40, Math.min(30, gain + d));
+    }
+    this.gainCache.set(cacheKey, gain);
+    return gain;
   }
 
   /** Render a timeline range to a draft MP4 for playback (cached by content). */
@@ -800,6 +840,9 @@ export class Engine extends EventEmitter {
       const sceneWeight = plan.sceneIds.length ? 0.6 : 0;
       ctx.progress(0, plan.sceneIds.length ? "Rendering 3D scenes" : "Composing");
       const dirs = await this.prepareScenes(plan, "final", scale, ctx, sceneWeight);
+      const target = p.export.loudnessLufs;
+      if (target != null) ctx.progress(sceneWeight, "Measuring loudness");
+      const loudnessGainDb = target != null ? await this.loudnessGain(plan, target) : undefined;
       ctx.progress(sceneWeight, "Composing and encoding");
       const r = await compose({
         ffmpeg: this.ffmpeg,
@@ -814,6 +857,7 @@ export class Engine extends EventEmitter {
         fontFile: this.fontFor,
         encoding: { ...p.export, codec },
         loudnessLufs: p.export.loudnessLufs,
+        loudnessGainDb,
         signal: ctx.signal,
         onProgress: (f) => ctx.progress(sceneWeight + f * (0.97 - sceneWeight), "Composing and encoding"),
       });
@@ -836,8 +880,10 @@ export interface MixMeter {
   truePeakDb: number;
   /** Loudest short-term (3 s) loudness. */
   maxShortTermLufs: number;
-  /** Spans (timeline frames) where the true peak exceeds -1 dBTP. */
+  /** Spans (timeline frames) where the true peak exceeds -0.5 dBTP. */
   hotSpans: { start: number; end: number; peakDb: number }[];
+  /** Gain the export applies to reach its loudness target (0 = as mixed). */
+  appliedGainDb?: number;
 }
 
 /** Parse FFmpeg ebur128 (framelog=info, peak=true) output into a meter reading. */
