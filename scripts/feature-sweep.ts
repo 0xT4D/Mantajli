@@ -90,7 +90,7 @@ class Rpc {
 
 /** Mean absolute difference (0–255) between two images, via FFmpeg. */
 async function imageDiff(a: string, b: string): Promise<number> {
-  const r = await run("ffmpeg", ["-hide_banner", "-v", "info", "-i", a, "-i", b, "-filter_complex", "[0:v]format=gray[a];[1:v]format=gray,scale2ref[b][a2];[a2][b]blend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG", "-f", "null", "-"], { timeoutMs: 60000 });
+  const r = await run("ffmpeg", ["-hide_banner", "-v", "info", "-i", a, "-i", b, "-filter_complex", "[0:v]format=gray[a];[1:v]format=gray[bb];[bb][a]scale2ref[b][a2];[a2][b]blend=all_mode=difference,signalstats,metadata=print:key=lavfi.signalstats.YAVG", "-f", "null", "-"], { timeoutMs: 60000 });
   const m = /lavfi\.signalstats\.YAVG=([\d.]+)/.exec(r.stderr);
   return m ? Number(m[1]) : NaN;
 }
@@ -103,7 +103,9 @@ const fx = await makeFixtures();
 const gem = path.join(DIR, "gem.obj");
 await writeFile(gem, "v 0 1 0\nv 1 0 0\nv 0 0 1\nv -1 0 0\nv 0 0 -1\nv 0 -1 0\nf 1 2 3\nf 1 3 4\nf 1 4 5\nf 1 5 2\nf 6 3 2\nf 6 4 3\nf 6 5 4\nf 6 2 5\n");
 const font = path.join(DIR, "Bahnschrift.ttf");
-await copyFile("C:/Windows/Fonts/bahnschrift.ttf", font).catch(() => copyFile("C:/Windows/Fonts/arial.ttf", font));
+// Any installed TTF serves as the "imported font" (Bahnschrift/Arial on Windows, Liberation elsewhere).
+const { defaultFontFile } = await import("../packages/engine/src/render/fonts.ts");
+await copyFile("C:/Windows/Fonts/bahnschrift.ttf", font).catch(async () => copyFile((await defaultFontFile(true)) ?? "C:/Windows/Fonts/arial.ttf", font));
 const lut = path.join(DIR, "warm.cube");
 const lutRows = ["LUT_3D_SIZE 2"];
 for (let b = 0; b < 2; b++) for (let g = 0; g < 2; g++) for (let r = 0; r < 2; r++) lutRows.push(`${Math.min(1, r * 1.1)} ${g * 0.95} ${b * 0.8}`);
@@ -113,6 +115,8 @@ await writeFile(srt, "1\n00:00:00,500 --> 00:00:02,000\nCut to the beat\n\n2\n00
 
 const engine = new Engine();
 await engine.init();
+// The fixtures are allowed AI media folders (Settings → Media folders), wherever the checkout lives.
+await engine.config.update({ aiMediaFolders: [path.dirname(fx.video), DIR] });
 const server = new EngineServer(engine);
 const port = await server.listen();
 const ui = await Rpc.connect(port, server.token, "ui");
@@ -129,7 +133,8 @@ await step("app.info reports FFmpeg and Blender", async () => {
 });
 await step("app.fonts lists system fonts", async () => {
   const f = await ui.call<string[]>("app.fonts");
-  check(f.length > 10, "few fonts");
+  // Windows has its font set; Linux maps the core families to Liberation/DejaVu (render/fonts.ts).
+  check(f.length >= (process.platform === "win32" ? 10 : 2), `few fonts: ${f.join(", ")}`);
   return `${f.length} families`;
 });
 await step("app.refreshDeps", async () => void (await ui.call("app.refreshDeps")));
@@ -382,6 +387,17 @@ await step("scene_camera_move (orbit, snap stops) + media plane + scatter", asyn
   check(p._images === 1, "preview");
   return `${mv.points} path points`;
 });
+await step("scatter burst: add (scatterBurst), patch, preview, unset", async () => {
+  const id = S.scene_empty;
+  const b = await ui.tool("scene_add_object", { sceneId: id, kind: "scatter", name: "Fountain", primitive: "coin", scatterCount: 60, scatterDistribution: "box", scatterArea: [0.2, 0.2, 0.05], location: [0, 0, 0.5], material: "gold", scatterBurst: { frame: 2, speed: 5 } });
+  await ui.tool("scene_update_object", { sceneId: id, objectId: b.objectId, patch: { scatter: { burst: { frame: 2, speed: 6, bounce: 0.4 } } } });
+  const obj = () => engine.project.scenes.find((x) => x.id === id)!.objects.find((o) => o.id === b.objectId)!;
+  check(obj().scatter!.count === 60 && obj().scatter!.burst!.speed === 6 && obj().scatter!.burst!.gravity === 9.81, JSON.stringify(obj().scatter));
+  const p = await ui.tool("scene_preview", { sceneId: id, frame: 10 });
+  check(p._images === 1, "preview");
+  await ui.tool("scene_update_object", { sceneId: id, objectId: b.objectId, unset: ["scatter.burst"] });
+  check(!obj().scatter!.burst, "burst not removed");
+});
 await step("scene_bake (draft) -> video asset", async () => {
   const sc = await ui.tool("scene_create", { name: "Bake", template: "particleBackdrop", durationFrames: 8 });
   const b = await ui.tool("scene_bake", { sceneId: sc.sceneId, quality: "draft" });
@@ -543,7 +559,7 @@ section("AI layer");
 await step("plan_save records a shot plan", async () => void (await ui.tool("plan_save", { brief: "sweep", summary: "test", status: "done", shots: [{ index: 0, description: "x", startFrame: 0, durationFrames: 10 }] })));
 await step("MCP clients cannot import outside the media folders", async () => {
   try {
-    await mcp.tool("media_import", { paths: ["C:/Windows/win.ini"] });
+    await mcp.tool("media_import", { paths: [process.platform === "win32" ? "C:/Windows/win.ini" : "/etc/hostname"] });
   } catch (e) {
     check((e as { category?: string }).category === "permission_denied" || /permission|outside/i.test(String(e)), String(e));
     return "permission_denied";
