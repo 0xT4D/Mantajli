@@ -22,7 +22,9 @@ pull the branch there. Release installer (session 3 build) predates sessions 4�
 4. Benchmark: `npx tsx scripts/benchmark/arena.ts` (≈23 min on CPU for the first build, ~2 min
    when the 3D cache is warm; `MANTAGLI_ARENA_STILLS=1` renders only the 2D cards in seconds;
    `MANTAGLI_ARENA_SIZE=1080x1920` on a GPU machine). Output in `tests/.tmp/arena/review/`.
-5. Packaging (verified in session 1): `npm run build:engine`, then
+5. Promo: `npx tsx scripts/promo-30s/build.ts export` (1080×1920; ≈90 min cold on CPU, ≈5 min
+   with the 3D cache). Report and the next three improvements: `docs/promo-30s-report.md`.
+6. Packaging (verified in session 1): `npm run build:engine`, then
    `source scripts/tauri-env.sh && cd apps/desktop && npx tauri build` (~15 min, LTO).
 
 ## Highest-value next steps

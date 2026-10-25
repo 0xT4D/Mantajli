@@ -119,6 +119,9 @@ cores), feature sweep 123/123 (all 65 tools), UI sweep 31/31, live parity script
   overs, a build quieter than its intro, quiet short voice lines, an inexact loudness target, soft
   3D through the CRT finish, flat cards, and a caption off-by-one. Numbers above and in
   REFERENCE_VIDEO_ANALYSIS.md §8–9.
+- Session 6 (cloud, CPU only): 30 s Mantagli promo at 1080×1920 made with the app
+  (`scripts/promo-30s/`, report `docs/promo-30s-report.md`): 900 frames, −13.7 LUFS, −0.6 dBTP;
+  cold export 92.5 min (721 EEVEE frames, no GPU), cached rebuild 5.3 min.
 
 ## Next steps (in order)
 1. Piper with a real voice model (and Windows SAPI natural voices): verify naturalness by ear
