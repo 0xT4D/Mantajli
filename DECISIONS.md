@@ -261,3 +261,48 @@ limiter, AAC) for the range and runs `ebur128` (integrated, LRA, true peak, shor
 spans above −0.5 dBTP). The ARENA benchmark measured +0.3 dBTP with a −14 LUFS target because the
 master limiter worked on samples (−0.2 dBFS); it now limits at 4× oversampling with a −1 dBFS
 ceiling, so inter-sample overs stay below 0 dBTP.
+
+## D34 — Pixel-unit look settings follow the frame; lens remaps are supersampled (session 6)
+Measured on the ARENA title (edge contrast, 99th-percentile horizontal gradient): raw Blender
+frame 112, after yuv420/x264 112, after the CRT look 44. The render was not the problem; the
+finish was. Two causes, two fixes:
+- Built-in looks are authored for a 1080 px short side. `lookSpec(id, saved, size)` scales their
+  `unit: "px"` params (fringe offset, scanline pitch, glow/blur radii, defaults included) to the
+  project's short side when the look is applied. Effects already on clips and looks saved by the
+  user keep their values: they were made in that project's pixels.
+- `lenscorrection` only interpolates bilinearly. Exports and exact stills remap at 2× and come
+  back with Lanczos (+~180 ms per 1080×1920 frame); draft range previews keep the fast path.
+Result on the same frame: 44 → 65. A narrower EEVEE pixel filter (1.0 vs 1.5 px) gained only 6 %
+and risks aliasing on thin neon lines, so Blender's default stays.
+
+## D35 — Card backdrops are rasterized once, by core, for both renderers
+A colour clip can carry `backdrop {style, accent, light, texture, focus, seed}` (spotlight,
+studio, smoke, grid, panel), modelled on what the reference teasers put behind type: a light pool,
+a lit wall meeting a floor, fractal smoke, a horizon grid, a UI window. `renderBackdrop` (core, pure)
+produces RGBA; the export writes it as a PNG input of the FFmpeg graph, the live compositor draws
+it to a canvas. Shapes are in short-side units, so the picture is the same at every resolution;
+only the static grain is per pixel. An e2e test compares exported pixels with the rasterizer
+(mean difference < 1.5 levels). Backdrops are static: motion comes from transforms, grain and
+cuts, which keeps the export a single looped image per card.
+
+## D36 — Voice engines are ranked by how they make speech, and compared by ear
+No speech-recognition model or neural voice could be downloaded in this environment (Hugging
+Face and GitHub releases are blocked), so naturalness could not be measured here; a crude pitch
+analysis was inconclusive and is not used. Providers carry `quality` (neural > parametric >
+formant) and `license`; the default is the best available local engine: Piper (neural, model
+installed by the user) > Windows SAPI > RHVoice > SVOX Pico > flite > eSpeak. RHVoice voices with
+non-commercial data licences are labelled. The Voice-over dialog's "Compare engines" speaks the
+first line with every local engine so the user chooses by listening. Cloud engines are never a
+default (D31). Engines without a usable rate control get a pitch-preserving tempo change.
+
+## D37 — The 3D frame cache is content-addressed
+Scene render keys hash the scene with every id renamed by order of first appearance, and frames
+live in `cache/scenes/<key>`. A scene rebuilt from a template, duplicated, or re-created by a
+script reuses frames; any change to its content (or its assets' bytes, the Blender script, the
+font, the quality) changes the key. Identical scenes share one render job (job keys derive from
+the directory). Key version 3: caches from earlier versions render once more.
+
+## D38 — Captions are timed from the clip as placed
+`clip.add` clamps a media clip to its source's whole frames, which can be one frame shorter than
+`round(seconds × fps)`. Narration timed captions from the rounded value, so the last caption
+could outlast its voice line by a frame. Captions (narrate and re-voice) now use the placed clip.

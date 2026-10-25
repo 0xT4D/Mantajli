@@ -187,3 +187,33 @@ voice (Windows SAPI or a cloud voice is the quality path); the 2D cards are plai
 the references' textured, layered backgrounds; loudness range is wider than Cybercamp/Securinets
 because the generated intro is sparse (a deliberate contrast, similar to Cybercamp's intro);
 3D at 540×960 on EEVEE-fast is soft compared with the references' 1080-wide renders.
+
+## 9. Session 6 quality pass: ARENA before → after (2026-10-25)
+
+Same benchmark script and score, rebuilt after the fixes (D34–D38). Both exports verified by the
+app and re-measured with ffprobe (counted frames) and ebur128.
+
+| Measure | Before (`review-final`, 14:47) | After (16:02) | References |
+|---|---|---|---|
+| Size / frames / duration | 540×960, 660, 22.000 s | 540×960, 660, 22.000 s | — |
+| Integrated loudness / true peak | −13.8 LUFS / −0.8 dBTP | −13.8 LUFS / −0.8 dBTP (meter predicted −13.9 / −0.8) | −13.4 … −13.9 (Cybercamp, Securinets) |
+| Edge contrast, "ARENA 7" (frame 300) | 44 | 62 | raw Blender frame: 112 |
+| Edge contrast, horizon grid (frame 60) | 30 | 40 | — |
+| Edge contrast, "JOIN US" (frame 600) | 35 | 46 | — |
+| 2D cards | flat colour + vignette, one title each | lit/textured backdrops (grid, studio, UI panel), kicker + headline with glow + subline | light pool / smoke / UI chrome + type hierarchy |
+| Voice | eSpeak NG (formant) | RHVoice `slt` (statistical); line levels −16.5 / −17.4 LUFS in the mix | — (no VO in the references) |
+| Captions | clean (thin), ended 1 frame after the voice | boxed, end exactly with the voice clip | — |
+| Full rebuild time | 22.5–23.5 min | 23.5 min cold; 1.7 min with the 3D cache warm | — |
+
+Edge contrast = 99th-percentile horizontal luma gradient in a fixed crop (scanlines do not affect
+it). The remaining gap to the raw render is the CRT look itself (1 px fringe, barrel magnification),
+which the references also have.
+
+What was not verified: whether RHVoice actually *sounds* more natural than eSpeak. No listening
+test or speech-recognition model was available here; the ranking follows the synthesis method
+(statistical vs formant). Piper (neural) is integrated but untested with a real voice model.
+
+Still behind the references: 2D type has no letter-spacing (the references' wide-tracked
+sublines), backdrops are static (Securinets' smoke drifts), 3D at 540×960 on EEVEE-fast lacks the
+references' 1080-wide detail, and the "SEASON 7" title ends 6 frames before its card's zoom-through
+peak (an editing detail in the benchmark script).

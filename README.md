@@ -13,8 +13,10 @@ Claude Code via MCP) edits the real, editable project.
 - Blender 4.2+ (5.2 LTS tested). Auto-detected in Program Files, `D:\DevTools`, or set in Settings
 - For the desktop shell: Rust + Tauri prerequisites (WebView2 ships with Windows 11)
 - Optional: an Anthropic API key for the in-app AI Director
-- Optional voice-over engines: Windows voices (built in), `espeak-ng`, or FFmpeg built with
-  `libflite`; cloud voices with `OPENAI_API_KEY` or `ELEVENLABS_API_KEY` in the engine's environment
+- Optional voice-over engines, most natural first: Piper (`pip install piper-tts` plus a voice model
+  in `<app data>/voices/piper` or `MANTAGLI_PIPER_VOICES`), Windows voices (built in), RHVoice
+  (`apt install rhvoice rhvoice-english`), SVOX Pico (`libttspico-utils`), FFmpeg's flite, `espeak-ng`;
+  cloud voices with `OPENAI_API_KEY` or `ELEVENLABS_API_KEY` in the engine's environment
 
 ## Run (development)
 ```bash
@@ -88,10 +90,16 @@ The installer lands in `<cargo target>/release/bundle/nsis/`.
   procedural synthesizer, not an AI model; because the app wrote every note, its beat and section
   markers are exact, so cuts land on the real drop.
 - **Voice-over** (Insert menu): one line per paragraph is spoken, placed on a *Voice* track with
-  timed captions, and the music ducks under it. Local engines by default (Windows voices,
-  espeak-ng, flite); OpenAI or ElevenLabs only when you pick them — then the script text is sent to
-  that service. Re-voice a single line without touching the rest. Captions are timed from the text,
-  not transcribed.
+  timed captions, and the music ducks under it. The default is the most natural local engine
+  installed (see Requirements); *Compare engines* plays the first line in each so you can choose by
+  ear, and each engine shows its quality class and licence (some RHVoice voices are non-commercial).
+  OpenAI or ElevenLabs only when you pick them — then the script text is sent to that service.
+  Re-voice a single line without touching the rest. Captions are timed from the text, not transcribed.
+- **Card backdrops**: a colour solid's *Backdrop* (Inspector) turns it into a lit, textured title
+  card — spotlight, studio wall + floor, smoke, horizon grid or UI panel — with accent colour,
+  light, texture, focus height and seed.
+- **Sharper finishes**: built-in looks adapt their pixel sizes to the project's resolution, and
+  lens/CRT distortion is resampled at 2× in exports.
 - **Sound design & mix** (Insert menu): suggested whooshes, risers, hits and glitches where the
   edit's transitions, drops and title reveals happen (fewer under dialogue), placed in one step;
   *Measure mix* reports loudness (LUFS), loudness range and true peak of the export mix, with

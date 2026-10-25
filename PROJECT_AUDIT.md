@@ -85,3 +85,13 @@ defects that unit tests had not: the master limiter let true peak reach +0.3 dBT
 builds started below their intro, short voice lines were 2–4 LU under the dialogue level, and
 the −14 LUFS export target landed at −12.7 LUFS. All four are fixed with regression tests;
 measured results are in PROJECT_STATUS.md and REFERENCE_VIDEO_ANALYSIS.md §8.
+
+## 7. Revision after the verification pass (session 6, later)
+The three gaps the first benchmark left open were addressed and re-measured (REFERENCE_VIDEO_ANALYSIS
+§9): 3D softness was traced to the CRT finish, not the render (fixed: frame-scaled looks,
+supersampled lens remap); flat cards were replaced by reusable backdrop styles; the voice default
+moved from eSpeak (formant) to the best installed local engine (RHVoice / Pico here, Piper when a
+model is installed). Revised constraints: voice naturalness cannot be verified in this container
+(no listening, no ASR or neural voice downloads), and the 3D render cache was keyed by random ids
+(now content-addressed). Next priorities: Piper with a real model, full-size ARENA on the GPU
+machine, letter-spacing for 2D type, animated backdrops.

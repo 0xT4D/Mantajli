@@ -1,6 +1,6 @@
 # Progress
 
-_Last updated: 2026-10-25 (session 5; sessions 4–5 detail in PROJECT_STATUS.md)_
+_Last updated: 2026-10-25 (session 6; sessions 4–6 detail in PROJECT_STATUS.md)_
 
 ## What works (verified this session)
 | Area | Verification |
@@ -45,13 +45,22 @@ _Last updated: 2026-10-25 (session 5; sessions 4–5 detail in PROJECT_STATUS.md
 | Transition presets (8 built-ins + saved per project) | `commands.test`, feature sweep, UI sweep (apply / save / undo in the inspector) |
 | Scatter bursts (deterministic coin fountains) | `cinematic.e2e` burst test (before / airborne / settled + still / identical re-render), feature sweep |
 | 3D titles fit 9:16 frames; scene object patches keep nested settings | `commands.test` |
+| Music generator with exact beat grid / sections; energy climbs into the drop | `music.test` (the app's beat tracker recovers tempo and drop) |
+| Voice-over: local engines (RHVoice, Pico, eSpeak, flite; SAPI untested here; Piper stand-in only), cloud (mock server), captions, ducking, re-voice | `voice.test`, feature sweep, UI sweep (compare engines) |
+| Sound-design suggestions; mix meter; true-peak limiter; two-pass loudness target (±0.5 LU) | `soundDesign.test`, `sounddesign.test`, `audio.e2e`, ARENA (−13.8 LUFS, −0.8 dBTP) |
+| Sharper 3D through looks (frame-scaled looks, supersampled lens) | `looks.test`; ARENA edge contrast +31–41 % |
+| Card backdrops (5 styles), export = live rasterizer | `backdrop.test`, `backdrop.e2e`, UI sweep |
+| Content-addressed 3D cache | `scenekey.test`; ARENA rebuild 1.7 min warm vs 23.5 cold |
+| End-to-end benchmark through the tool layer | `scripts/benchmark/arena.ts`: 540×960, 660 frames, 22.000 s, verified |
 
-Test totals (session 5, Linux container): unit 73 tests in 9 files; e2e 35 tests in 11 files
-(≈10 min on 4 CPU cores); feature sweep 123/123 (≈25 min); UI sweep 31/31. `npm run typecheck` clean. Last full run on the RTX machine (session 3):
-75 tests in 18 files, ≈160 s.
+Test totals (session 6, Linux container, under xvfb): 128 tests in 28 files — unit 92/92 (16 files),
+e2e 36/36 (603 s for all on 4 CPU cores); feature sweep 126/126 (71/71 tools, 0 skipped); UI sweep 40/40 with 0 console
+errors. `npm run typecheck` clean. Last full run on the RTX machine (session 3): 75 tests in 18 files, ≈160 s.
 
 ## Known gaps / limitations
-- Benchmark montage export not yet run (needs the RTX machine; see PROJECT_STATUS.md).
+- NEON QUEST benchmark export not yet run (needs the RTX machine); ARENA runs on CPU at 540×960.
+- Voice naturalness not verified by ear here; Piper (neural) untested with a real model.
+- 2D text has no letter-spacing; card backdrops are static.
 - Bursts bake one object per piece (≤ 2000); bigger piles stay static instances. No fracture/shatter.
 - In-app Director never ran against the real Claude API (no API key on this machine). Request
   shape (adaptive thinking, effort, `fallbacks: "default"` beta, eager input streaming) follows the

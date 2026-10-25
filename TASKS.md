@@ -119,6 +119,13 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Master limiter at 4× oversampling, −1 dBFS ceiling (true peak was +0.3 dBTP)
 - [x] Export presets reel720, landscape720, project (custom size)
 - [x] End-to-end benchmark ARENA through the tool layer: build, export, verify, review, fix (`scripts/benchmark/arena.ts`)
+- [x] Verification pass: feature sweep 126/126 (71/71 tools), UI sweep 37/37 → 40/40 with the new states
+- [x] 3D sharpness: frame-scaled built-in looks + supersampled lens remap (edge contrast 44 → 65 on the ARENA title)
+- [x] Card backdrops (spotlight, studio, smoke, grid, panel): core rasterizer shared by export and live preview, Inspector + AI tools
+- [x] More natural local voices: RHVoice, SVOX Pico (tested), Piper (neural; stand-in executable test only); quality/licence per provider; "Compare engines"
+- [x] Content-addressed 3D frame cache (rebuilt / duplicated scenes reuse frames)
+- [x] Captions end with their voice clip (off-by-one)
+- [ ] Piper verified with a real voice model (needs a machine that can download one)
 - [ ] Speech-to-text (Whisper) for transcript-timed captions — not started (no model download in this container)
 - [ ] Interactive three.js 3D viewport — not started (3D is edited through forms and rendered previews)
 - [ ] Image / 3D-model generation providers — not started
