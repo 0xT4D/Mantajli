@@ -1,6 +1,6 @@
 # Progress
 
-_Last updated: 2026-10-23 (session 3)_
+_Last updated: 2026-10-25 (session 5; sessions 4–5 detail in PROJECT_STATUS.md)_
 
 ## What works (verified this session)
 | Area | Verification |
@@ -35,15 +35,24 @@ _Last updated: 2026-10-23 (session 3)_
 | Reverse clips (incl. audio) and freeze frames (ripple) | `speedramp.test` + `speedramp.e2e` (PSNR per frame, audio RMS) |
 | Chroma key with despill; live per-pixel key | `textfx.e2e` pixel checks; live vs exact screenshot |
 | Shape masks (frame coords, feather, invert); word-by-word text + kinetic captions | `animation.test` + `textfx.e2e` (feather ramp vs core formula); screenshots |
-| Feature sweep: all 59 AI/MCP tools + engine RPC over the real WebSocket, every effect / transition / text animation / blend mode rendered and checked | `npx tsx scripts/feature-sweep.ts` → 53/53, report in `tests/.tmp/feature-sweep/REPORT.md` |
+| Feature sweep: all AI/MCP tools + engine RPC over the real WebSocket, every effect / transition / text animation / blend mode rendered and checked | `npx tsx scripts/feature-sweep.ts` → 53/53 in session 3; 123/123 with all 65 tools in session 5 (Linux), report in `tests/.tmp/feature-sweep/REPORT.md` |
 | UI sweep: every workspace, dialog, inspector, playback, shortcuts, no console errors | `node scripts/ui-sweep.mjs` (engine + Vite running) → 24/24 |
 | 20 s promo made with Mantagli (original score, Blender 3D, UI shots, beat cuts, speed ramp, masks, captions, −14 LUFS) | `scripts/promo/*`; exported + verified 1920×1080, 20.0 s, H.264/AAC; `C:\Users\USER\Videos\Mantagli Promo\` |
 | Release installer rebuilt with session-2 features up to chroma key | `npx tauri build` → `Mantagli_0.1.0_x64-setup.exe` 23.5 MiB (21:59) |
+| Session-4 cinematic toolkit (easings, scramble, adjustment layers, lens/CRT, two-sided transitions, 3D media/paths/scatter, sections, SFX) | `cinematic.e2e`, `sfx.test` — re-verified on Linux in session 5 |
+| Everything above on a second platform: Ubuntu 24.04, FFmpeg 6.1, Blender 4.0 (Xvfb, no GPU), Chromium | session 5: unit 73/73, e2e 35/35, UI sweep 31/31, feature sweep 123/123 (65/65 tools) |
+| Live preview ≈ export for vignette, lens, scanlines, grain, aberration (layer-space stylize) | `scripts/ui-live-parity.mjs`: mean abs diff vignette 0.4, lens 1.0, aberration 0.9, CRT look 3.6 (were 7.5 / 27.4 / 6.7 / 21.2); grain σ 13.0 vs 13.4 |
+| Transition presets (8 built-ins + saved per project) | `commands.test`, feature sweep, UI sweep (apply / save / undo in the inspector) |
+| Scatter bursts (deterministic coin fountains) | `cinematic.e2e` burst test (before / airborne / settled + still / identical re-render), feature sweep |
+| 3D titles fit 9:16 frames; scene object patches keep nested settings | `commands.test` |
 
-Test totals: `npm test` (runs unit + e2e projects) → 75 tests in 18 files, all passing (≈160 s, RTX 4060).
-`npm run typecheck` clean.
+Test totals (session 5, Linux container): unit 73 tests in 9 files; e2e 35 tests in 11 files
+(≈10 min on 4 CPU cores); feature sweep 123/123 (≈25 min); UI sweep 31/31. `npm run typecheck` clean. Last full run on the RTX machine (session 3):
+75 tests in 18 files, ≈160 s.
 
 ## Known gaps / limitations
+- Benchmark montage export not yet run (needs the RTX machine; see PROJECT_STATUS.md).
+- Bursts bake one object per piece (≤ 2000); bigger piles stay static instances. No fracture/shatter.
 - In-app Director never ran against the real Claude API (no API key on this machine). Request
   shape (adaptive thinking, effort, `fallbacks: "default"` beta, eager input streaming) follows the
   current API docs but is unverified live. MCP path is verified.
@@ -55,7 +64,8 @@ Test totals: `npm test` (runs unit + e2e projects) → 75 tests in 18 files, all
 - Reversed clip audio is silent in the live preview (exact in renders); reverse/freeze cannot be
   combined with speed ramps.
 - Blend modes and wipes are exact in the export; the live preview uses canvas equivalents (wipes
-  without feathered edges).
+  without feathered edges). Live grain is a different random pattern than the export's (same
+  strength).
 - Composition (FFmpeg) is CPU-bound: ~3 fps for 1080×1920 with looks; an 8 s reel exports in
   ~100 s on this machine (was faster earlier in the session; cause not found, no code regression).
 - OTIO: flat tracks only (nested stacks skipped with a warning); non-Mantagli transitions import as
@@ -69,6 +79,8 @@ Test totals: `npm test` (runs unit + e2e projects) → 75 tests in 18 files, all
   dir). Deleting `C:\tests` was blocked by a safety check; the user can delete it.
 
 ## Environment notes
+- Session 5 ran in a cloud Linux container: Node 22.22, FFmpeg 6.1.1 (apt), Blender 4.0.2 (apt; EEVEE
+  under `xvfb-run`, llvmpipe, no GPU), Chromium from `/opt/pw-browsers`, fonts-liberation.
 - C: has ~1.3 GB free. All toolchains and build output are on D: (see CLAUDE.md).
 - Rust GNU toolchain + MSYS2 binutils (`D:\DevTools\mingw-binutils`) + `gcc` pass-through shim
   (`D:\DevTools\winres-shim`) for Tauri resources. `source scripts/tauri-env.sh` before cargo/tauri.

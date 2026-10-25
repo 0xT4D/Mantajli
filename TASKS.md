@@ -93,10 +93,20 @@ Legend: [x] done and verified · [~] implemented, partially verified · [ ] not 
 - [x] Saved project looks (look.save/remove, Looks tab, look_save tool)
 - [x] UI for 3D: media/scatter/shake/spot/edges/pattern fields, camera move section, key easing
 - [x] Feature sweep fixed (the rendered-feature checks had been silently skipped) + new tool steps
-- [~] Benchmark montage "NEON QUEST" (scripts/benchmark): built, reviewed, fixes applied; export pending
-- [ ] Live preview parity: lens remap is nearest-neighbour, motion smear 8 samples, grain/CA export-only
-- [ ] Physics (coin bursts, shatter) — not in the scene protocol
-- [ ] Transition presets (saved transition + duration + easing) — looks cover effect stacks only
+- [~] Benchmark montage "NEON QUEST" (scripts/benchmark): built, reviewed, fixes applied; export pending (needs the RTX dev machine; script portable since session 5)
+- [x] Live preview parity: layer-space stylize, exact vignette, bilinear lens, live grain + CA, longer smear (session 5, `ui-live-parity.mjs`)
+- [~] Physics: coin bursts done (scatter.burst, deterministic ballistic + floor bounces, session 5); shatter/fracture not started
+- [x] Transition presets: 8 built-ins + saved per project, Inspector + AI tools (session 5)
+
+## M13 Second platform + parity (session 5, cloud Linux container)
+- [x] Verified sessions 1–4 on Ubuntu 24.04 (FFmpeg 6.1, Blender 4.0 via Xvfb, Chromium): unit, e2e, UI sweep
+- [x] Portability fixes: FFmpeg < 7 graph files, Cycles without OIDN, Linux fonts, browser scripts, rpc home dir, benchmark paths
+- [x] Settings "Media folders" for the AI media boundary (tests no longer depend on the checkout location)
+- [x] Live preview: only rendered 3D draft frames are requested (partial cache flooded failed loads)
+- [x] chromeTitle text fits the frame width; composition cache keys include the 3D font
+- [x] Export vignette in RGB, equal to the core formula (RENDERER_VERSION 7)
+- [x] Feature sweep on Linux: 123/123, all 65 tools (sweep fixtures made portable)
+- [x] Scatter bursts (physics-lite) + fix: nested scene-object patches reset other settings
 
 ## M7 AI Director
 - [x] Shared tool layer (52 tools), MCP server (standalone + bridge to app)

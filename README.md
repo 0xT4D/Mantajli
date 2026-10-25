@@ -5,7 +5,9 @@ Blender renders the 3D scenes, FFmpeg composes and encodes, and Claude (in-app o
 Claude Code via MCP) edits the real, editable project.
 
 ## Requirements
-- Windows 10/11 (macOS/Linux should work but are untested)
+- Windows 10/11 (primary). The engine, tests and browser UI also run on Linux (verified on
+  Ubuntu 24.04 with apt `ffmpeg` 6.1 and `blender` 4.0; headless EEVEE needs a display, e.g.
+  `xvfb-run`; install `fonts-liberation` for Arial-compatible text). macOS is untested.
 - Node.js 22.13+
 - FFmpeg + FFprobe on PATH (e.g. `winget install Gyan.FFmpeg`)
 - Blender 4.2+ (5.2 LTS tested). Auto-detected in Program Files, `D:\DevTools`, or set in Settings
@@ -67,6 +69,17 @@ The installer lands in `<cargo target>/release/bundle/nsis/`.
 - The reference teasers and what Mantagli learned from them: `REFERENCE_VIDEO_ANALYSIS.md`;
   the benchmark montage built only with these tools: `scripts/benchmark/`.
 
+### Session 5
+- **Transition presets**: Inspector → *Preset* applies a transition with its length, easing and
+  intensity to the selected clip(s) in one step (whip on the drop, punch through, glitch hit,
+  beat flash, ...); *Save preset* keeps a clip's transition for reuse in the project.
+- **Live preview closer to the export**: vignette, lens/CRT distortion, scanlines, film grain and
+  chromatic aberration now use the export's formulas and geometry while playing.
+- **Settings → Media folders**: extra folders (e.g. footage on another drive) the AI Director and
+  Claude Code may import from and export to.
+- **Bursts**: a scatter object's *Burst* makes its pieces fly out at a frame — coin fountains,
+  debris — falling, bouncing on the floor and settling flat, identically on every render.
+
 ## AI Director (in-app)
 Open the AI panel, add your Anthropic API key (stored in the Windows Credential Manager), write a
 brief and press **Direct**. The Director inspects the project, analyses music, records a shot
@@ -88,6 +101,7 @@ npm test             # unit: core model/commands, AI tools, director (scripted m
 npm run test:e2e     # real FFmpeg + Blender: pipeline acceptance + agent montage over MCP
 npx tsx scripts/feature-sweep.ts            # every tool / effect / transition over the real protocol
 node scripts/ui-sweep.mjs out [url]         # every workspace, dialog, menu (engine + Vite running)
+node scripts/ui-live-parity.mjs out [url]   # live preview vs exact frame per effect (engine + Vite running)
 ```
 
 ## Project folder

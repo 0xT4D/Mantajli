@@ -182,3 +182,42 @@ drop even on a loudness-flat master. They become labelled section markers only �
 edits. Sound effects are synthesized procedurally (seeded, deterministic, original material) into
 `generated/sfx`, and placed by the effect's own anchor (risers end on the frame, whooshes peak on
 it, hits start on it).
+
+## D26 — The live preview stylizes pictures in their own space (2026-10-25)
+FFmpeg applies a layer's effects after the fit scale and before the clip transform, so vignette,
+scanlines, grain and lens distortion are relative to the fit-scaled picture — including the
+overflow a "fill" fit hides (an 800×800 still in 16:9 is a 1920×1920 layer). The live preview now
+draws media and 3D pictures into a layer-sized canvas (≤ ~6 frames of pixels), applies those
+effects there with the export's formulas (core `vignetteFactor`, `lensSource`, `grainSigma`),
+then places it with the clip transform. Colour, text and adjustment layers are frame-sized in the
+export, so the frame stays their space. Parity is measured, not asserted: `scripts/ui-live-parity.mjs`
+captures the live canvas and the exact frame in the running app and reports their difference.
+The export runs the vignette in RGB (on YUV FFmpeg scales limited-range luma and the falloff is
+not cos⁴).
+
+## D27 — A second platform as a check, not a target (2026-10-25)
+Session 5 ran in a Linux container (FFmpeg 6.1, Blender 4.0, no GPU). Rather than special-casing
+tests, the engine adapts: FFmpeg < 7 reads the graph with `-filter_complex_script`; Cycles uses
+OpenImageDenoise only when the build has it (OptiX otherwise, else no denoise with a warning);
+Linux resolves Arial/Times/Courier to the metric-compatible Liberation fonts so 3D text never
+falls back to Blender's ~35 % wider built-in font. The AI media boundary (D12) gained a
+user-controlled extension — Settings → Media folders — which no AI/MCP tool can change; tests
+declare their fixture folder through it instead of depending on where the checkout lives.
+
+## D28 — Transition presets are data, like looks (2026-10-25)
+A preset is a `Transition` value (type, length, easing, intensity) with a label: built-ins in the
+core registry (`TRANSITION_PRESETS`), user presets in `project.transitionPresets`. Applying is one
+command over many clips (one undo step) that shortens the length to fit short clips and reports
+which; built-in names are reserved; saving by an existing label replaces it.
+
+## D29 — Bursts are computed, then baked as keyframes (2026-10-25)
+"Physics" for montage needs believable, repeatable motion more than simulation: a burst is a
+seeded launch (cone around a direction, speed jitter, stagger) followed by closed-form ballistic
+flight with floor bounces (restitution, horizontal friction) until the rebound is too weak, then
+the piece settles flat. The scene script bakes it as one keyframe per frame on a per-piece object
+sharing the piece mesh: motion blur works (Blender's frame-change handlers do not run at motion-blur
+subframes — measured) and the saved .blend keeps the animation. No rigid-body cache, so a single
+frame renders on its own and every render of it is identical. Capped at 2000 pieces; piles of
+thousands stay on the geometry-nodes instancer.
+Related fix: deep patches (`patchSchema`) now recurse through `.optional()`; before, a partial patch
+of an optional settings object was parsed whole and reset every other field to its default.
