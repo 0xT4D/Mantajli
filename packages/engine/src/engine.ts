@@ -33,7 +33,7 @@ import { defaultFontFile, resolveFontFile } from "./render/fonts.js";
 import { ProjectSession } from "./session.js";
 import { exists, quickHash, safeName, sha1, writeFileAtomic } from "./util/fsx.js";
 import { encodeWav, synthesizeSfx, type SfxKind, type SfxOptions } from "./media/sfx.js";
-import { generateMusic, type MusicOptions, type MusicResult } from "./media/music.js";
+import { generateMusic, MUSIC_GENERATOR_VERSION, type MusicOptions, type MusicResult } from "./media/music.js";
 import { defaultTtsProvider, finishSpeech, ttsProviders, type TtsProviderId, type TtsRequest } from "./voice/tts.js";
 import { runFfmpeg } from "./media/ffmpeg.js";
 import { run } from "./util/proc.js";
@@ -260,7 +260,7 @@ export class Engine extends EventEmitter {
    */
   async generateMusic(opts: MusicOptions, source: ChangeSource = "user"): Promise<{ asset: Asset; sections: MusicResult["sections"]; bpm: number }> {
     const s = this.requireSession();
-    const key = sha1(JSON.stringify({ v: 1, ...opts })).slice(0, 10);
+    const key = sha1(JSON.stringify({ v: MUSIC_GENERATOR_VERSION, ...opts })).slice(0, 10);
     const file = path.join(s.dir, "generated", "music", `${opts.style}-${opts.mood}-${key}.wav`);
     const { promise } = this.jobs.submit({ type: "music", label: `Compose ${opts.style} music`, key: `music:${key}` }, async (ctx) => {
       const r = generateMusic(opts);

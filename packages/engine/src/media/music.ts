@@ -42,6 +42,9 @@ export interface MusicResult {
 }
 
 const SR = 48000;
+/** Bump when the rendered audio changes, so cached files of the same settings are composed again. */
+export const MUSIC_GENERATOR_VERSION = 2;
+
 const ENERGY: Record<MusicSectionKind, number> = { intro: 0.25, build: 0.55, drop: 1, breakdown: 0.3, outro: 0.4 };
 
 /**
@@ -273,9 +276,12 @@ export function generateMusic(opts: MusicOptions): MusicResult {
     const t1 = sectionEnd(s);
     for (let t = s.time; t < t1 - 1e-6; t += beat) {
       const lastBarOfBuild = s.label === "build" && t >= t1 - bar;
+      const halfTime = Math.round((t - s.time) / beat) % 2 === 0;
       const kickHere =
         s.label === "drop" ||
-        (style === "techno" && (s.label === "build" ? !lastBarOfBuild : s.label === "intro" ? s.bars >= 4 && t >= s.time + (s.bars * bar) / 2 : s.label === "outro" ? t < s.time + bar : false));
+        (style === "techno" && (s.label === "build" ? !lastBarOfBuild : s.label === "intro" ? s.bars >= 4 && t >= s.time + (s.bars * bar) / 2 : s.label === "outro" ? t < s.time + bar : false)) ||
+        // Synthwave: a half-time kick drives the build (out for the roll) and rides out the first outro bar.
+        (style === "synthwave" && halfTime && ((s.label === "build" && !lastBarOfBuild) || (s.label === "outro" && t < s.time + bar)));
       if (kickHere && style !== "cinematic") kick(t, s.label === "drop" ? 1 : 0.85);
     }
   }
@@ -328,10 +334,13 @@ export function generateMusic(opts: MusicOptions): MusicResult {
         t += step;
       }
       if (style === "cinematic") for (let t = t0; t < t1 - 1e-6; t += beat / 2) tick(t, 0.35 + 0.5 * ((t - t0) / (t1 - t0)));
+      // An eighth-note bass pulse that swells through the build, so it climbs from the intro's level
+      // instead of thinning out until the roll (techno's build already rides the kick and bass).
+      if (style !== "techno") for (let t = t0; t < t1 - beat / 2 - 1e-6; t += beat / 2) bassNote(t, beat * 0.4, chordAt(t).root, 0.5 + 0.5 * ((t - t0) / (t1 - t0)), style === "cinematic" ? 700 : 1200 + 1600 * ((t - t0) / (t1 - t0)));
       for (let t = t0; t < t1 - 1e-6; t += beat / (style === "synthwave" ? 4 : 2)) {
         const ch = chordAt(t);
         const step = Math.round(t / (beat / 4)) % 8;
-        if (style === "synthwave") lead(t, beat / 4, ch.notes[[0, 1, 2, 3, 2, 1, 3, 2][step]!]! + 12, 0.028, 1600 + 2000 * ((t - t0) / (t1 - t0)), step % 2 ? 0.35 : -0.35);
+        if (style === "synthwave") lead(t, beat / 4, ch.notes[[0, 1, 2, 3, 2, 1, 3, 2][step]!]! + 12, 0.03 + 0.02 * ((t - t0) / (t1 - t0)), 1600 + 2000 * ((t - t0) / (t1 - t0)), step % 2 ? 0.35 : -0.35);
         else bassNote(t, beat / 2, ch.root - 12, 0.5, 800);
       }
       if (next?.label === "drop") breath(t1);
@@ -384,6 +393,20 @@ export function generateMusic(opts: MusicOptions): MusicResult {
 
     if (s.label === "outro") {
       impact(t0, 1.2);
+      // Ride-out: the groove's bass (and the synthwave arpeggio) carry on through the first bar and fade,
+      // so the tail after the last drop is music, not just a held chord.
+      if (style !== "cinematic") {
+        for (let t = t0; t < Math.min(t1, t0 + bar) - 1e-6; t += beat / 2) {
+          const u = (t - t0) / bar;
+          bassNote(t, beat * 0.4, chordAt(t0).root, 0.9 * (1 - 0.6 * u), 2000);
+          if (style === "synthwave")
+            for (let k = 0; k < 2; k++) {
+              const tt = t + (k * beat) / 4;
+              const step = Math.round(tt / (beat / 4)) % 8;
+              lead(tt, beat / 4, chordAt(t0).notes[[0, 1, 2, 3, 2, 1, 3, 2][step]!]! + 12, 0.05 * (1 - 0.7 * u), 2800, step % 2 ? 0.35 : -0.35);
+            }
+        }
+      }
       const ch = chordAt(t0);
       for (const note of [...ch.notes, ch.notes[1]! + 12]) {
         const f = svf();

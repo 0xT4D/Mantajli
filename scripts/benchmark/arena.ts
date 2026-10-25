@@ -60,10 +60,10 @@ for (const sc of [horizon, chrome, metal]) await tool("scene_set_render_settings
 const v1 = track("V1");
 const shot = (input: Record<string, unknown>) => tool("timeline_add_clip", { trackId: v1, mode: "error", ...input });
 await shot({ type: "scene", sceneId: horizon.sceneId, start: 0, duration: BUILD, name: "Horizon" });
-const build = await shot({ type: "color", fill: "#0a0614", start: BUILD, duration: DROP - BUILD, name: "Build" });
+const build = await shot({ type: "color", fill: "#24104a", start: BUILD, duration: DROP - BUILD, name: "Build" });
 const arena = await shot({ type: "scene", sceneId: chrome.sceneId, start: DROP, duration: 2 * BAR, name: "Arena" });
-const cardA = await shot({ type: "color", fill: "#14062a", start: DROP + 2 * BAR, duration: BAR, name: "Card workshops" });
-const cardB = await shot({ type: "color", fill: "#03201d", start: DROP + 3 * BAR, duration: OUTRO - (DROP + 3 * BAR), name: "Card battles" });
+const cardA = await shot({ type: "color", fill: "#3b1270", start: DROP + 2 * BAR, duration: BAR, name: "Card workshops" });
+const cardB = await shot({ type: "color", fill: "#0b4a40", start: DROP + 3 * BAR, duration: OUTRO - (DROP + 3 * BAR), name: "Card battles" });
 const end = await shot({ type: "scene", sceneId: metal.sceneId, start: OUTRO, duration: END - OUTRO, name: "End card" });
 await tool("timeline_add_transition", { clipId: build.clipId, type: "glitchCut", duration: 8 });
 await tool("timeline_add_transition", { clipId: arena.clipId, type: "zoomThrough", duration: 12 });
@@ -71,6 +71,11 @@ await tool("transition_apply_preset", { clipIds: [cardA.clipId], preset: "dropWh
 await tool("timeline_add_transition", { clipId: cardB.clipId, type: "whipUp", duration: 8 });
 await tool("timeline_add_transition", { clipId: end.clipId, type: "flash", duration: 6 });
 await tool("timeline_set_clip_properties", { clipId: end.clipId, props: { fadeOut: 24 } });
+// Flat cards read as empty: a strong vignette turns each fill into a radial glow, grain gives it texture.
+for (const c of [build, cardA, cardB]) {
+  await tool("effect_add", { clipId: c.clipId, type: "vignette", params: { amount: 1 } });
+  await tool("effect_add", { clipId: c.clipId, type: "grain", params: { amount: 10 } });
+}
 
 // ---- 4. Typography.
 const titles = track("Titles");
@@ -86,7 +91,7 @@ const text = (t: string, start: number, duration: number, y: number, size: numbe
     style: { fontFamily: FONT, bold: true, fontSize: Math.round(size * k), color, shadow: true, ...extra },
     animation: anim,
   });
-await text("PRESS START", 30, BUILD - 40, 560, 60, "#1de9b6", { in: "typewriter", out: "fade", duration: 14 });
+await text("PRESS START", 30, BUILD - 40, 560, 84, "#1de9b6", { in: "typewriter", out: "fade", duration: 14 });
 const season = await text("SEASON 7", BUILD + 6, DROP - BUILD - 6, -260, 150, "#ffffff", { in: "scramble", out: "none", duration: 16 }, { strokeWidth: 3, strokeColor: "#2a0f5a" });
 await tool("effect_add", { clipId: season.clipId, type: "glitch", params: { amount: 0.5, density: 0.15, seed: 4 } });
 await text("WORKSHOPS", DROP + 2 * BAR + 4, BAR - 4, 0, 130, "#f4f4f6", { in: "scramble", out: "none", duration: 8 }, { strokeWidth: 2, strokeColor: "#ff2bd6" });

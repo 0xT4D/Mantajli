@@ -13,6 +13,14 @@ const rms = (a: Float32Array, t0: number, t1: number) => {
   for (let i = i0; i < i1; i++) s += a[i]! * a[i]!;
   return Math.sqrt(s / Math.max(1, i1 - i0));
 };
+/** RMS above ~150 Hz (one-pole high-pass): closer to perceived loudness than plain RMS, which sub-bass dominates. */
+const hpRms = (a: Float32Array, t0: number, t1: number) => {
+  const k = Math.exp((-2 * Math.PI * 150) / 48000);
+  const out = new Float32Array(a.length);
+  let y = 0;
+  for (let i = 1; i < a.length; i++) out[i] = y = k * (y + a[i]! - a[i - 1]!);
+  return rms(out, t0, t1);
+};
 
 describe("music generator", () => {
   it("plans whole structures: every bar used, drops on 4-bar phrases", () => {
@@ -40,6 +48,13 @@ describe("music generator", () => {
       const drop = a.sections.find((x) => x.label === "drop")!;
       const bar = 240 / a.bpm;
       expect(rms(a.left, drop.time, drop.time + 2 * bar), style).toBeGreaterThan(1.8 * rms(a.left, intro.time, intro.time + intro.bars * bar));
+      // Energy climbs into the drop: a 2-bar build starts at least 2 dB above the intro's last bar
+      // (ARENA benchmark, synthwave: it started 0.4 dB below and the voice-over ducked it to near silence).
+      const b = generateMusic({ style, mood: "dark", duration: 22, seed: 4 });
+      const bb = 240 / b.bpm;
+      const build = b.sections.find((x) => x.label === "build")!;
+      const db = (t0: number) => 20 * Math.log10(hpRms(b.left, t0, t0 + bb));
+      expect(db(build.time) - db(build.time - bb), style).toBeGreaterThan(2);
     }
     const x = generateMusic({ style: "synthwave", mood: "tense", duration: 8, seed: 2 });
     const y = generateMusic({ style: "synthwave", mood: "tense", duration: 8, seed: 2 });
