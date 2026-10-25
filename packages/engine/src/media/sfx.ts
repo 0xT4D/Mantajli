@@ -7,8 +7,9 @@
  * use in any export. Same parameters → identical file.
  */
 
-export const SFX_KINDS = ["whoosh", "riser", "impact", "hit", "glitch", "blip", "downlifter"] as const;
-export type SfxKind = (typeof SFX_KINDS)[number];
+import { SFX_SPECS, type SfxKind } from "@mantagli/core";
+
+export { SFX_KINDS, SFX_SPECS, sfxPlacement, type SfxKind } from "@mantagli/core";
 
 export interface SfxOptions {
   /** Seconds (risers/downlifters/whooshes stretch; others ignore it). */
@@ -18,16 +19,6 @@ export interface SfxOptions {
   seed?: number;
 }
 
-/** Default length (s) and where the "moment" is, as a fraction of the length (whoosh peak, riser end). */
-export const SFX_SPECS: Record<SfxKind, { duration: number; anchor: number; description: string }> = {
-  whoosh: { duration: 0.8, anchor: 0.62, description: "Air sweep that peaks at the anchor: whip pans, fast moves, slides." },
-  riser: { duration: 2, anchor: 1, description: "Noise and pitch rising into the anchor (ends there): builds into a drop or a reveal." },
-  impact: { duration: 2.5, anchor: 0, description: "Deep boom with a noise burst, starting at the anchor: drops, title slams, logo hits." },
-  hit: { duration: 0.5, anchor: 0, description: "Short punchy transient at the anchor: snap cuts, text pops, beat accents." },
-  glitch: { duration: 0.35, anchor: 0, description: "Digital stutter at the anchor: glitch cuts, scrambled text." },
-  blip: { duration: 0.12, anchor: 0, description: "UI beep at the anchor: cursors, menu selections, typing." },
-  downlifter: { duration: 1.5, anchor: 0, description: "Falling sweep from the anchor: breakdowns, endings." },
-};
 
 const SR = 48000;
 
@@ -189,14 +180,3 @@ export function encodeWav(left: Float32Array, right: Float32Array): Buffer {
   return buf;
 }
 
-/**
- * Timeline start frame and length for an effect placed at an anchor frame:
- * risers end on it, whooshes peak on it, everything else starts on it.
- */
-export function sfxPlacement(kind: SfxKind, anchorFrame: number, fps: number, duration?: number): { start: number; frames: number } {
-  const spec = SFX_SPECS[kind];
-  const dur = duration ?? spec.duration;
-  const frames = Math.max(1, Math.round(dur * fps));
-  const start = Math.round(anchorFrame - spec.anchor * dur * fps);
-  return { start: Math.max(0, start), frames };
-}

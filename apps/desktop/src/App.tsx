@@ -1,6 +1,6 @@
 import { Loader2, PlugZap } from "lucide-react";
 import { AutoEditDialog } from "./components/AutoEdit";
-import { MusicDialog, VoiceDialog } from "./components/Generate";
+import { MusicDialog, SoundDesignDialog, VoiceDialog } from "./components/Generate";
 import { useEffect } from "react";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { clipEnd, projectDuration, type Clip } from "@mantagli/core";
@@ -62,6 +62,7 @@ export function App() {
       {dialog === "autoEdit" && session.project && <AutoEditDialog />}
       {dialog === "music" && session.project && <MusicDialog />}
       {dialog === "voice" && session.project && <VoiceDialog />}
+      {dialog === "soundDesign" && session.project && <SoundDesignDialog />}
       <Toasts />
       <DragGhost />
     </div>

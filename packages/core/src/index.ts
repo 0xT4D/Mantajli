@@ -12,6 +12,7 @@ export * from "./migrate.js";
 export * from "./music.js";
 export * from "./sceneTemplates.js";
 export * from "./schema.js";
+export * from "./soundDesign.js";
 export * from "./summary.js";
 export * from "./time.js";
 export * from "./timeline.js";

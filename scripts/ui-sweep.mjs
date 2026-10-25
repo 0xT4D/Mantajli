@@ -97,6 +97,33 @@ await state("insert adjustment layer (inspector)", async () => {
   await page.locator("text=/Adjustment ·/").first().waitFor({ timeout: 4000 });
 });
 await state("undo the insert", () => page.keyboard.press("Control+z"));
+const openInsert = async (item) => {
+  await page.locator("button[title^='Insert title']").first().click();
+  await page.locator(`button:has-text('${item}')`).first().click();
+};
+await state("generate music: compose and preview", async () => {
+  await openInsert("Generate music");
+  await page.locator("button:has-text('Compose & preview')").first().click();
+  await page.locator("div[role=dialog] audio, audio[controls]").first().waitFor({ timeout: 90000 });
+});
+await state("close music", closeDialog);
+await state("voice-over: estimate and preview", async () => {
+  await openInsert("Voice-over");
+  await page.locator("div[role=dialog] textarea").first().fill("This year, the arena opens again.\n\nSeventh edition. Join us.");
+  await page.locator("div[role=dialog] textarea").first().blur();
+  await page.locator("button:has-text('Estimate timing')").first().click();
+  await page.locator("div[role=dialog] >> text=/Estimated/").first().waitFor({ timeout: 10000 });
+  await page.locator("button:has-text('Preview first segment')").first().click();
+  await page.locator("audio[controls]").first().waitFor({ timeout: 60000 });
+});
+await state("close voice-over", closeDialog);
+await state("sound design: suggestions and mix meter", async () => {
+  await openInsert("Sound design");
+  await page.locator("div[role=dialog] label").or(page.locator("div[role=dialog]").getByText("Nothing to add")).first().waitFor({ timeout: 10000 });
+  await page.locator("button:has-text('Measure mix')").first().click();
+  await page.locator("div[role=dialog] >> text=/Integrated/").first().waitFor({ timeout: 120000 });
+});
+await state("close sound design", closeDialog);
 await state("add track menu", async () => {
   await page.locator("button[title='Add track']").first().click();
   await page.locator("button:has-text('Audio track')").first().waitFor({ timeout: 2000 });

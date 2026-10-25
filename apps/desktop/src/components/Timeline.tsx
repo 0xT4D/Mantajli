@@ -466,6 +466,7 @@ function InsertMenu({ project }: { project: Project }) {
             [
               ["music", "Generate music…", <Music size={13} key="m" />],
               ["voice", "Voice-over…", <Mic size={13} key="v" />],
+              ["soundDesign", "Sound design & mix…", <AudioLines size={13} key="s" />],
             ] as const
           ).map(([k, label, icon]) => (
             <button key={k} type="button" className="flex w-full items-center gap-2 px-2 py-1 text-left text-[12px] hover:bg-hover" onClick={() => (setOpen(false), useStudio.getState().setDialog(k))}>

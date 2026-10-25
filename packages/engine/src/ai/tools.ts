@@ -1,6 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { SFX_KINDS, SFX_SPECS, sfxPlacement } from "../media/sfx.js";
+import { suggestSoundDesign, type Asset } from "@mantagli/core";
 import { MUSIC_MOODS, MUSIC_SECTION_KINDS, MUSIC_STYLE_SPECS, MUSIC_STYLES } from "../media/music.js";
 import { captionCues, estimateSpeechSeconds } from "../voice/narration.js";
 import { TTS_PROVIDER_IDS, ttsProviders } from "../voice/tts.js";
@@ -45,6 +46,7 @@ import {
   type ErrorCategory,
 } from "@mantagli/core";
 import type { Engine } from "../engine.js";
+import type { Transaction } from "../session.js";
 import { exportOtio, importOtio } from "../interchange/otio.js";
 import { exportCaptions, importCaptions } from "../interchange/captions.js";
 import { isInside, safeName } from "../util/fsx.js";
@@ -100,6 +102,23 @@ const session = (ctx: ToolContext) => ctx.engine.requireSession();
 const MAX_TOOL_WAIT_S = 45;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const label = (tool: string) => `AI: ${tool}`;
+
+/**
+ * Put a sound effect on an SFX-role track (created when missing); effects overlap freely, so a
+ * busy track hands it to another SFX track. Clip name = effect kind (sound design reads it back).
+ */
+function placeSfx(tx: Transaction, o: { assetId: string; kind: string; start: number; frames: number; gainDb?: number; trackId?: string }): { trackId: string; clipId: string } {
+  let trackId = o.trackId ?? tx.project.tracks.find((t) => t.kind === "audio" && t.role === "sfx")?.id;
+  if (!trackId) trackId = tx.dispatch("track.add", { kind: "audio", name: "SFX", role: "sfx" }).trackId;
+  const busy = (id: string) => tx.project.tracks.find((t) => t.id === id)!.clips.some((c) => c.start < o.start + o.frames && c.start + c.duration > o.start);
+  if (busy(trackId)) {
+    const free = tx.project.tracks.find((t) => t.kind === "audio" && t.role === "sfx" && !busy(t.id));
+    trackId = free?.id ?? tx.dispatch("track.add", { kind: "audio", name: "SFX", role: "sfx" }).trackId;
+  }
+  const c = tx.dispatch("clip.add", { trackId, clip: { type: "media", assetId: o.assetId, start: o.start, duration: o.frames, name: o.kind }, mode: "error" });
+  if (o.gainDb) tx.dispatch("clip.update", { clipId: c.clipId, props: { volumeDb: o.gainDb } });
+  return { trackId, clipId: c.clipId };
+}
 
 /** Folders the AI may import media from. */
 function mediaRoots(ctx: ToolContext): string[] {
@@ -1044,20 +1063,35 @@ export const TOOLS: ToolDef[] = [
       const s = session(ctx);
       const fps = s.project.settings.fps.num / s.project.settings.fps.den;
       const place = sfxPlacement(i.kind, i.anchorFrame, fps, i.duration);
-      const r = s.transaction(label(`sfx ${i.kind}`), ctx.source, (tx) => {
-        let trackId = i.trackId ?? tx.project.tracks.find((t) => t.kind === "audio" && t.role === "sfx")?.id;
-        if (!trackId) trackId = tx.dispatch("track.add", { kind: "audio", name: "SFX", role: "sfx" }).trackId;
-        // SFX overlap freely: put it on another SFX track if this one is busy there.
-        const busy = (id: string) => tx.project.tracks.find((t) => t.id === id)!.clips.some((c) => c.start < place.start + place.frames && c.start + c.duration > place.start);
-        if (busy(trackId)) {
-          const free = tx.project.tracks.find((t) => t.kind === "audio" && t.role === "sfx" && !busy(t.id));
-          trackId = free?.id ?? tx.dispatch("track.add", { kind: "audio", name: "SFX", role: "sfx" }).trackId;
-        }
-        const c = tx.dispatch("clip.add", { trackId, clip: { type: "media", assetId: asset.id, start: place.start, duration: place.frames, name: i.kind }, mode: "error" });
-        if (i.gainDb) tx.dispatch("clip.update", { clipId: c.clipId, props: { volumeDb: i.gainDb } });
-        return { trackId, clipId: c.clipId };
-      });
+      const r = s.transaction(label(`sfx ${i.kind}`), ctx.source, (tx) => placeSfx(tx, { assetId: asset.id, kind: i.kind, ...place, gainDb: i.gainDb, trackId: i.trackId }));
       return { data: { assetId: asset.id, ...r, start: place.start, frames: place.frames } };
+    },
+  }),
+  tool({
+    name: "sfx_suggest",
+    description:
+      "Context-aware sound design: reads the timeline and proposes effects where the picture or music calls for them - whooshes at whip pans and slides, a riser + hit through a zoom-through, glitches at glitch cuts, impacts on drops and downlifters into breakdowns (only when the music is not Mantagli-generated, which already has them), a glitch under scrambling titles, a blip for typewriter titles, a hit for titles landing on downbeats. Keeps the mix clear: one effect per moment, minimum spacing, at most ~0.6 per second, nothing where an effect already is, quieter (and no title accents) under dialogue. apply=false returns the list to review; apply=true places them (or only the listed indices) on SFX tracks in one undo step.",
+    input: z.object({
+      apply: z.boolean().default(false),
+      only: z.array(z.number().int().min(0)).max(200).optional(),
+      intensity: z.enum(["subtle", "normal", "bold"]).default("normal"),
+      start: Frame.optional(),
+      end: Frame.optional(),
+    }),
+    mutates: true,
+    async run(ctx, i) {
+      const s = session(ctx);
+      const all = suggestSoundDesign(s.project, { intensity: i.intensity, start: i.start, end: i.end });
+      const list = all.map((x, index) => ({ index, ...x }));
+      if (!i.apply) return { data: { suggestions: list } };
+      const chosen = i.only ? list.filter((x) => i.only!.includes(x.index)) : list;
+      const fps = s.project.settings.fps.num / s.project.settings.fps.den;
+      const assets: Asset[] = [];
+      for (const x of chosen) assets.push(await ctx.engine.generateSfx(x.kind, { duration: x.duration, pitch: x.pitch, seed: x.index + 1 }, ctx.source));
+      const placed = s.transaction(label("sound design"), ctx.source, (tx) =>
+        chosen.map((x, k) => ({ index: x.index, kind: x.kind, anchorFrame: x.anchorFrame, ...placeSfx(tx, { assetId: assets[k]!.id, kind: x.kind, ...sfxPlacement(x.kind, x.anchorFrame, fps, x.duration), gainDb: x.gainDb }) })),
+      );
+      return { data: { applied: placed.length, placed } };
     },
   }),
   tool({
@@ -1241,6 +1275,33 @@ export const TOOLS: ToolDef[] = [
         return { clipId: c.clipId, start: old.start, frames, previousFrames: old.duration, captions };
       });
       return { data: { assetId: v.asset.id, provider: v.provider, ...r } };
+    },
+  }),
+  tool({
+    name: "audio_meter",
+    description: "Measure the mix of the timeline (or start-end frames) as it will be exported - gains, fades, ducking, loudness target, limiter, AAC: integrated loudness (LUFS), loudness range, true peak and the spans hotter than -1 dBTP, with warnings (clipping risk, too quiet/loud for platforms, voice over un-ducked music). Renders the audio only.",
+    input: z.object({ start: Frame.optional(), end: Frame.optional() }),
+    mutates: false,
+    async run(ctx, i) {
+      const s = session(ctx);
+      const m = await ctx.engine.meterMix({ start: i.start, end: i.end });
+      const fps = s.project.settings.fps.num / s.project.settings.fps.den;
+      const warnings: string[] = [];
+      if (m.truePeakDb > -1) warnings.push(`True peak ${m.truePeakDb.toFixed(1)} dBTP: may distort on platforms; lower the loudest clips or set an export loudness target.`);
+      if (m.integratedLufs < -20) warnings.push(`Quiet mix (${m.integratedLufs.toFixed(1)} LUFS); social platforms play around -14 LUFS - set export loudness to -14.`);
+      if (m.integratedLufs > -9) warnings.push(`Very loud mix (${m.integratedLufs.toFixed(1)} LUFS); platforms will turn it down and it may sound squashed.`);
+      if (m.loudnessRangeLu > 15) warnings.push(`Wide loudness range (${m.loudnessRangeLu.toFixed(1)} LU): quiet passages may be lost on phones.`);
+      const hasVoice = s.project.tracks.some((t) => t.role === "dialogue" && t.clips.length);
+      const hasMusic = s.project.tracks.some((t) => t.role === "music" && t.clips.length);
+      if (hasVoice && hasMusic && !s.project.mix.ducking.enabled) warnings.push("Voice and music overlap without ducking: enable audio_set_ducking so the voice stays intelligible.");
+      return {
+        data: {
+          ...m,
+          hotSpans: m.hotSpans.slice(0, 20).map((h) => ({ ...h, seconds: `${(h.start / fps).toFixed(2)}-${(h.end / fps).toFixed(2)}` })),
+          exportLoudnessTarget: s.project.export.loudnessLufs ?? null,
+          warnings,
+        },
+      };
     },
   }),
   tool({

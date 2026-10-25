@@ -36,6 +36,7 @@ import { encodeWav, synthesizeSfx, type SfxKind, type SfxOptions } from "./media
 import { generateMusic, type MusicOptions, type MusicResult } from "./media/music.js";
 import { defaultTtsProvider, finishSpeech, ttsProviders, type TtsProviderId, type TtsRequest } from "./voice/tts.js";
 import { runFfmpeg } from "./media/ffmpeg.js";
+import { run } from "./util/proc.js";
 
 export const EXPORT_PRESET_SIZES: Record<string, { width: number; height: number; codec?: "prores" }> = {
   reel1080: { width: 1080, height: 1920 },
@@ -657,6 +658,45 @@ export class Engine extends EventEmitter {
     return { path: out, cached: false, frame: f, warnings: plan.warnings };
   }
 
+  /**
+   * Measure the mix of a range as it will be exported (gains, fades, ducking, loudness target,
+   * limiter, AAC): integrated loudness, loudness range, true peak and where it gets near clipping.
+   * Only the audio is rendered (the picture is a blank frame).
+   */
+  async meterMix(opts: { start?: number; end?: number } = {}): Promise<MixMeter> {
+    const s = this.requireSession();
+    const p = s.project;
+    const total = projectDuration(p);
+    const start = Math.max(0, opts.start ?? 0);
+    const end = Math.min(total, opts.end ?? total);
+    if (end <= start) fail("invalid_params", "Nothing to measure: the range is empty");
+    const plan = { ...buildCompositionPlan(p, { rangeStart: start, rangeEnd: end }), layers: [] };
+    if (!plan.audio.length) fail("invalid_params", "No audio in this range");
+    const key = this.planKey(plan, { kind: "meter", loud: p.export.loudnessLufs ?? null });
+    const out = s.cacheDir("previews", `mix-${key}.mp4`);
+    if (!(await exists(out)))
+      await this.jobs.submit({ type: "preview", label: "Measure mix", key: `meter:${key}` }, async (ctx) => {
+        await compose({
+          ffmpeg: this.ffmpeg,
+          project: p,
+          plan,
+          scale: 0.1,
+          output: "video",
+          outPath: out,
+          workRoot: s.cacheDir("tmp"),
+          mediaPath: this.mediaPathFor(false),
+          sceneFrames: () => undefined,
+          fontFile: this.fontFor,
+          draft: true,
+          loudnessLufs: p.export.loudnessLufs,
+          encoding: { codec: "h264", crf: 40, encoderPreset: "ultrafast", audioBitrateK: p.export.audioBitrateK },
+          signal: ctx.signal,
+        });
+      }).promise;
+    const r = await run(this.ffmpeg, ["-hide_banner", "-nostats", "-i", out, "-map", "0:a", "-af", "ebur128=peak=true:framelog=info", "-f", "null", "-"], { timeoutMs: 300_000, maxCapture: 32 << 20 });
+    return parseEbur128(r.stderr, start, p.settings.fps.num / p.settings.fps.den);
+  }
+
   /** Render a timeline range to a draft MP4 for playback (cached by content). */
   async renderPreviewRange(start: number, end: number, opts: { scale?: number } = {}): Promise<{ path: string; cached: boolean; job?: JobInfo; warnings: string[] }> {
     const s = this.requireSession();
@@ -785,4 +825,43 @@ export class Engine extends EventEmitter {
   fps(): number {
     return fpsValue(this.project.settings.fps);
   }
+}
+
+export interface MixMeter {
+  integratedLufs: number;
+  loudnessRangeLu: number;
+  truePeakDb: number;
+  /** Loudest short-term (3 s) loudness. */
+  maxShortTermLufs: number;
+  /** Spans (timeline frames) where the true peak exceeds -1 dBTP. */
+  hotSpans: { start: number; end: number; peakDb: number }[];
+}
+
+/** Parse FFmpeg ebur128 (framelog=info, peak=true) output into a meter reading. */
+export function parseEbur128(log: string, startFrame: number, fps: number): MixMeter {
+  const num = (re: RegExp) => Number(re.exec(log)?.[1] ?? NaN);
+  const summary = log.slice(log.lastIndexOf("Summary:"));
+  const hot: { start: number; end: number; peakDb: number }[] = [];
+  let maxS = -Infinity;
+  for (const m of log.matchAll(/t:\s*([\d.]+).*?S:\s*(-?[\d.]+).*?FTPK:\s*(-?[\d.inf]+)\s+(-?[\d.inf]+)\s+dBFS/g)) {
+    const t = Number(m[1]);
+    const st = Number(m[2]);
+    if (t >= 3 && Number.isFinite(st)) maxS = Math.max(maxS, st);
+    const pk = Math.max(Number(m[3]), Number(m[4]));
+    if (pk > -1) {
+      const f = startFrame + Math.round(t * fps);
+      const last = hot[hot.length - 1];
+      if (last && f - last.end <= Math.round(fps * 0.25)) {
+        last.end = f;
+        last.peakDb = Math.max(last.peakDb, pk);
+      } else hot.push({ start: f, end: f, peakDb: pk });
+    }
+  }
+  return {
+    integratedLufs: Number(/I:\s*(-?[\d.]+) LUFS/.exec(summary)?.[1] ?? NaN),
+    loudnessRangeLu: Number(/LRA:\s*(-?[\d.]+) LU/.exec(summary)?.[1] ?? NaN),
+    truePeakDb: num(/True peak:\s*Peak:\s*(-?[\d.inf]+) dBFS/),
+    maxShortTermLufs: Number.isFinite(maxS) ? maxS : NaN,
+    hotSpans: hot,
+  };
 }

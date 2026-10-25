@@ -1,4 +1,4 @@
-import { Mic, Music, Plus } from "lucide-react";
+import { Gauge, Mic, Music, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { CAPTION_STYLES, fpsValue, MUSIC_MOOD_LABELS, MUSIC_MOODS, MUSIC_STYLE_SPECS, MUSIC_STYLES, projectDuration, type CaptionStyle, type MusicMood, type MusicStyle } from "@mantagli/core";
 import { engine } from "../engine/client";
@@ -105,7 +105,14 @@ export function MusicDialog() {
   );
 }
 
-type Provider = { id: string; label: string; kind: "local" | "cloud"; available: boolean; reason?: string; voices: { id: string; name: string }[] };
+/** The engine's first voice in the UI language (English otherwise), else its first voice. */
+function defaultVoice(voices: { id: string; name: string; language?: string }[]): string {
+  const lang = (navigator.language || "en-US").toLowerCase();
+  const pick = (l: string) => voices.find((v) => (v.language ?? v.id).toLowerCase() === l) ?? voices.find((v) => (v.language ?? v.id).toLowerCase().startsWith(l.split("-")[0]!));
+  return (pick(lang) ?? pick("en-us") ?? voices[0])?.id ?? "";
+}
+
+type Provider = { id: string; label: string; kind: "local" | "cloud"; available: boolean; reason?: string; voices: { id: string; name: string; language?: string }[] };
 type SegmentOut = { text: string; start?: number; frames?: number; seconds?: number; path?: string };
 
 /**
@@ -132,7 +139,7 @@ export function VoiceDialog() {
       const first = list.find((x) => x.available);
       if (first) {
         setProvider(first.id);
-        setVoice(first.voices[0]?.id ?? "");
+        setVoice(defaultVoice(first.voices));
       }
     });
   }, [call]);
@@ -186,7 +193,7 @@ export function VoiceDialog() {
             value={provider}
             onChange={(v) => {
               setProvider(v);
-              setVoice(providers?.find((x) => x.id === v)?.voices[0]?.id ?? "");
+              setVoice(defaultVoice(providers?.find((x) => x.id === v)?.voices ?? []));
             }}
             options={(providers ?? []).map((x) => ({ value: x.id, label: `${x.label}${x.available ? "" : ` — ${x.reason}`}` }))}
           />
@@ -224,6 +231,134 @@ export function VoiceDialog() {
             ? "Cloud engine: the script text is sent to the provider with your API key (set in the engine's environment)."
             : "Local engine: nothing leaves this computer."}{" "}
           Captions are timed across each segment's real audio by text length (not speech recognition). Music on music tracks is ducked under the voice.
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+type Suggestion = { index: number; kind: string; anchorFrame: number; gainDb: number; reason: string; trigger: string };
+/** Meter values are null when not measurable (NaN over JSON), e.g. no 3 s window in a short mix. */
+const db = (v: number | null, unit: string) => (v === null || !Number.isFinite(v) ? "—" : `${v.toFixed(1)} ${unit}`);
+type Meter = { integratedLufs: number | null; loudnessRangeLu: number | null; truePeakDb: number | null; maxShortTermLufs: number | null; hotSpans: { seconds: string; peakDb: number }[]; warnings: string[]; exportLoudnessTarget: number | null };
+
+/** Context-aware sound design: review suggested effects, place the chosen ones, and measure the mix. */
+export function SoundDesignDialog() {
+  const { session, setDialog, call, toast } = useStudio();
+  const p = session.project!;
+  const fps = fpsValue(p.settings.fps);
+  const [intensity, setIntensity] = useState<"subtle" | "normal" | "bold">("normal");
+  const [list, setList] = useState<Suggestion[] | null>(null);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [meter, setMeter] = useState<Meter | null>(null);
+  const [busy, setBusy] = useState("");
+  const tool = async <T,>(name: string, input: Record<string, unknown>) => {
+    const r = await call<ToolResult<T>>("tools.call", { name, input }).catch(() => null);
+    if (!r?.ok) toast("error", r?.error?.message ?? `${name} failed`);
+    return r?.ok ? r.data : undefined;
+  };
+  const suggest = async (level = intensity) => {
+    setBusy("suggest");
+    const d = await tool<{ suggestions: Suggestion[] }>("sfx_suggest", { intensity: level });
+    setBusy("");
+    if (d) {
+      setList(d.suggestions);
+      setPicked(new Set(d.suggestions.map((x) => x.index)));
+    }
+  };
+  useEffect(() => void suggest(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const apply = async () => {
+    setBusy("apply");
+    const d = await tool<{ applied: number }>("sfx_suggest", { apply: true, intensity, only: [...picked] });
+    setBusy("");
+    if (d) {
+      toast("ok", `Placed ${d.applied} sound effect(s) on SFX tracks (undo with Ctrl+Z)`);
+      void suggest();
+    }
+  };
+  const measure = async () => {
+    setBusy("meter");
+    const d = await tool<Meter>("audio_meter", {});
+    setBusy("");
+    if (d) setMeter(d);
+  };
+  const fmt = (f: number) => `${Math.floor(f / fps / 60)}:${(f / fps % 60).toFixed(1).padStart(4, "0")}`;
+  return (
+    <Dialog
+      title="Sound design"
+      width={640}
+      onClose={() => setDialog(null)}
+      footer={
+        <>
+          <Button onClick={() => setDialog(null)}>Close</Button>
+          <Button disabled={!!busy} onClick={() => void measure()}>
+            <Gauge size={13} /> {busy === "meter" ? "Measuring…" : "Measure mix"}
+          </Button>
+          <Button variant="primary" disabled={!!busy || !picked.size} onClick={() => void apply()}>
+            <Plus size={13} /> {busy === "apply" ? "Placing…" : `Place ${picked.size} effect(s)`}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-2">
+        <Row label="Intensity">
+          <Select
+            value={intensity}
+            onChange={(v) => {
+              setIntensity(v);
+              void suggest(v);
+            }}
+            options={[
+              { value: "subtle", label: "Subtle (−4 dB)" },
+              { value: "normal", label: "Normal" },
+              { value: "bold", label: "Bold (+3 dB)" },
+            ]}
+          />
+        </Row>
+        <div className="max-h-64 space-y-0.5 overflow-auto rounded border border-line p-1">
+          {list === null && <div className="p-2 text-[11px] text-mute">Reading the timeline…</div>}
+          {list?.length === 0 && <div className="p-2 text-[11px] text-mute">Nothing to add: no transitions, drops or titles without an effect yet.</div>}
+          {list?.map((x) => (
+            <label key={x.index} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-0.5 text-[11px] hover:bg-hover">
+              <input
+                type="checkbox"
+                checked={picked.has(x.index)}
+                onChange={(e) => {
+                  const next = new Set(picked);
+                  if (e.target.checked) next.add(x.index);
+                  else next.delete(x.index);
+                  setPicked(next);
+                }}
+              />
+              <span className="tabular w-12 shrink-0 text-mute">{fmt(x.anchorFrame)}</span>
+              <span className="w-20 shrink-0 font-medium">{x.kind}</span>
+              <span className="tabular w-12 shrink-0 text-mute">{x.gainDb} dB</span>
+              <span className="truncate text-dim">{x.reason}</span>
+            </label>
+          ))}
+        </div>
+        {meter && (
+          <div className="space-y-1 rounded border border-line p-2 text-[11px]">
+            <div className="flex flex-wrap gap-3">
+              <span>Integrated <b>{db(meter.integratedLufs, "LUFS")}</b></span>
+              <span>True peak <b className={(meter.truePeakDb ?? -99) > -1 ? "text-warn" : ""}>{db(meter.truePeakDb, "dBTP")}</b></span>
+              <span>Range {db(meter.loudnessRangeLu, "LU")}</span>
+              <span>Loudest 3 s {db(meter.maxShortTermLufs, "LUFS")}</span>
+              <span className="text-mute">export target: {meter.exportLoudnessTarget ?? "as mixed"}</span>
+            </div>
+            {meter.hotSpans.length > 0 && <div className="text-warn">Above −1 dBTP at {meter.hotSpans.map((h) => `${h.seconds}s`).join(", ")}</div>}
+            {meter.warnings.map((w) => (
+              <div key={w} className="text-warn">
+                {w}
+              </div>
+            ))}
+            {meter.warnings.length === 0 && <div className="text-ok">No problems found.</div>}
+          </div>
+        )}
+        <div className="text-[10px] text-mute">
+          Effects are synthesized (original, free to use) and land on their moment: whooshes peak at whip pans, risers end on the cut or the drop,
+          hits and impacts start there. One effect per moment, at most ~0.6 per second, quieter under dialogue. The meter renders the mix as it will be
+          exported (gains, ducking, loudness target, limiter).
         </div>
       </div>
     </Dialog>
